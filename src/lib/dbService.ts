@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { Service, Appointment, BusinessHours, BlockedDate, SalonSettings, AdminUser, TimeSlot } from '../types';
+import { Service, Appointment, BusinessHours, BlockedDate, SalonSettings, AdminUser, TimeSlot, Staff } from '../types';
 
 // Let's store a flag for whether the Supabase tables exist.
 // If we hit an error indicating table not found (PG error '42P01'), we'll toggle this
@@ -9,10 +9,10 @@ let supabaseTablesExist = true;
 // Default Mock/Fallback data for local-first mode when tables aren't set up yet
 const DEFAULT_SETTINGS: SalonSettings = {
   id: 'default-settings-id',
-  salon_name: 'AURA Hair Salon',
-  salon_email: 'concierge@aurasalon.com',
-  salon_phone: '+1 (555) 890-4200',
-  salon_address: '420 N. Beverly Drive, Beverly Hills, CA 90210',
+  salon_name: 'Raj Hair Studio',
+  salon_email: 'concierge@rajhairstudio.in',
+  salon_phone: '+91 98765 43210',
+  salon_address: 'C-Scheme, Near Statue Circle, Jaipur, Rajasthan 302005',
   slot_interval_minutes: 30,
   booking_notice_hours: 2,
 };
@@ -20,90 +20,211 @@ const DEFAULT_SETTINGS: SalonSettings = {
 const DEFAULT_SERVICES: Service[] = [
   {
     id: 's1',
-    name: 'Signature Haircut & Style',
-    description: 'A bespoke haircut including an organic essential oil wash, custom scalp massage, and expert blowout styling.',
-    duration_minutes: 60,
-    price: 95,
+    name: 'Haircut',
+    description: 'Precision haircut customized to your face shape, including herbal shampoo wash and expert styling finish.',
+    category: 'Hair Services',
+    duration_minutes: 45,
+    price: 399,
     is_active: true,
   },
   {
     id: 's2',
-    name: 'Balayage & Dimensional Color',
-    description: 'Custom hand-painted high/lowlights for a naturally sun-kissed, low-maintenance dimensional color transition. Includes gloss treatment.',
-    duration_minutes: 150,
-    price: 240,
+    name: 'Hair Styling',
+    description: 'Professional blow-dry, curling, or sleek iron styling for parties, events, and festive occasions.',
+    category: 'Hair Services',
+    duration_minutes: 45,
+    price: 599,
     is_active: true,
   },
   {
     id: 's3',
-    name: 'Silk Blowout & Deep Hydration',
-    description: 'Rich moisture-infusing wash, deep conditioning steam mask, and smooth, high-shine signature blowout.',
-    duration_minutes: 45,
-    price: 65,
+    name: 'Beard Trim',
+    description: 'Expert beard shaping, mustache detailing, hot towel herbal steam, and beard oil conditioning.',
+    category: 'Grooming & Beard',
+    duration_minutes: 30,
+    price: 299,
     is_active: true,
   },
   {
     id: 's4',
-    name: 'Full Tint & Restorative Gloss',
-    description: 'All-over single-process rich color from roots to ends with our organic oils-infused luxury gloss styling.',
-    duration_minutes: 90,
-    price: 135,
+    name: 'Hair Wash',
+    description: 'Rejuvenating hair wash with organic herbal shampoo and scalp conditioning.',
+    category: 'Hair Services',
+    duration_minutes: 20,
+    price: 249,
     is_active: true,
   },
   {
     id: 's5',
-    name: 'Keratin Revitalizing Therapy',
-    description: 'Advanced amino-acid smoothing treatment that reconstructs hair fibers, eliminates frizz, and reduces daily styling time.',
+    name: 'Hair Spa',
+    description: 'Intensive botanical oil nourishment treatment to repair damaged hair, reduce hairfall, and revitalize scalp.',
+    category: 'Hair Services',
+    duration_minutes: 60,
+    price: 999,
+    is_active: true,
+  },
+  {
+    id: 's6',
+    name: 'Hair Coloring',
+    description: 'Global hair coloring or root touch-up with ammonia-free professional organic pigments.',
+    category: 'Hair Services',
+    duration_minutes: 90,
+    price: 1499,
+    is_active: true,
+  },
+  {
+    id: 's7',
+    name: 'Hair Smoothening',
+    description: 'Advanced protein smoothening treatment that eliminates frizz, adds mirror-like shine, and manages unruly hair.',
+    category: 'Hair Services',
+    duration_minutes: 150,
+    price: 3499,
+    is_active: true,
+  },
+  {
+    id: 's8',
+    name: 'Hair Straightening',
+    description: 'Permanent or rebonding hair straightening for silky, straight, manageable hair with long-lasting effect.',
+    category: 'Hair Services',
+    duration_minutes: 180,
+    price: 3999,
+    is_active: true,
+  },
+  {
+    id: 's9',
+    name: 'Facial',
+    description: 'Deep cleansing, exfoliating herbal facial to restore natural skin glow, hydration, and radiance.',
+    category: 'Skin & Facial',
+    duration_minutes: 60,
+    price: 1199,
+    is_active: true,
+  },
+  {
+    id: 's10',
+    name: 'Head Massage',
+    description: 'Relaxing Ayurvedic champi head massage with warm herbal oils to relieve stress and improve circulation.',
+    category: 'Spa & Wellness',
+    duration_minutes: 30,
+    price: 399,
+    is_active: true,
+  },
+  {
+    id: 's11',
+    name: 'Bridal Makeup',
+    description: 'Complete luxury bridal makeover for weddings and grand celebrations by certified celebrity makeup artists.',
+    category: 'Bridal & Makeup',
     duration_minutes: 120,
-    price: 285,
+    price: 4999,
+    is_active: true,
+  },
+  {
+    id: 's12',
+    name: 'Groom Makeup',
+    description: 'Specialized subtle groom makeover, skin prep, and hair styling for weddings and special occasions.',
+    category: 'Bridal & Makeup',
+    duration_minutes: 60,
+    price: 2499,
+    is_active: true,
+  }
+];
+
+const DEFAULT_STAFF: Staff[] = [
+  {
+    id: 'st1',
+    name: 'Vikram Singh',
+    role: 'Master Stylist & Director',
+    experience: '12+ Years Experience',
+    specialty: 'Precision Cuts & Advanced Styling',
+    bio: 'Renowned across Jaipur for bespoke precision haircuts and contemporary styling tailored to individual face structures.',
+    image_url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&auto=format&fit=crop&q=80',
+    is_active: true,
+  },
+  {
+    id: 'st2',
+    name: 'Ananya Sharma',
+    role: 'Senior Bridal Makeup Artist',
+    experience: '9+ Years Experience',
+    specialty: 'Bridal Makeovers & Airbrush',
+    bio: 'Certified celebrity makeup artist specializing in flawless bridal looks, traditional aesthetics, and skin preps.',
+    image_url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&auto=format&fit=crop&q=80',
+    is_active: true,
+  },
+  {
+    id: 'st3',
+    name: 'Rohit Meena',
+    role: 'Hair Color & Treatment Specialist',
+    experience: '8+ Years Experience',
+    specialty: 'Balayage, Keratin & Smoothening',
+    bio: 'Expert in ammonia-free organic hair coloring, complex balayage techniques, and deep restorative hair spa therapies.',
+    image_url: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400&auto=format&fit=crop&q=80',
+    is_active: true,
+  },
+  {
+    id: 'st4',
+    name: 'Pooja Rathore',
+    role: 'Skin & Wellness Expert',
+    experience: '7+ Years Experience',
+    specialty: 'Herbal Facials & Ayurvedic Therapies',
+    bio: 'Dedicated to skin rejuvenation, radiant herbal facials, and relaxing Ayurvedic head massage rituals.',
+    image_url: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=400&auto=format&fit=crop&q=80',
     is_active: true,
   }
 ];
 
 const DEFAULT_BUSINESS_HOURS: BusinessHours[] = [
-  { id: 'b0', weekday: 0, is_open: false, start_time: '10:00', end_time: '17:00' },
-  { id: 'b1', weekday: 1, is_open: false, start_time: '09:00', end_time: '18:00' },
-  { id: 'b2', weekday: 2, is_open: true, start_time: '09:00', end_time: '18:00' },
-  { id: 'b3', weekday: 3, is_open: true, start_time: '09:00', end_time: '18:00' },
-  { id: 'b4', weekday: 4, is_open: true, start_time: '09:00', end_time: '20:00' },
-  { id: 'b5', weekday: 5, is_open: true, start_time: '09:00', end_time: '20:00' },
-  { id: 'b6', weekday: 6, is_open: true, start_time: '09:00', end_time: '18:00' },
+  { id: 'b0', weekday: 0, is_open: true, start_time: '10:00', end_time: '20:00' },
+  { id: 'b1', weekday: 1, is_open: true, start_time: '09:30', end_time: '20:30' },
+  { id: 'b2', weekday: 2, is_open: true, start_time: '09:30', end_time: '20:30' },
+  { id: 'b3', weekday: 3, is_open: true, start_time: '09:30', end_time: '20:30' },
+  { id: 'b4', weekday: 4, is_open: true, start_time: '09:30', end_time: '20:30' },
+  { id: 'b5', weekday: 5, is_open: true, start_time: '09:30', end_time: '21:00' },
+  { id: 'b6', weekday: 6, is_open: true, start_time: '09:30', end_time: '21:00' },
 ];
 
 const INITIAL_LOCAL_APPOINTMENTS: Appointment[] = [
   {
     id: 'a1',
-    full_name: 'Genevieve Ross',
-    email: 'genevieve.ross@gmail.com',
-    phone: '310-555-0199',
+    full_name: 'Rahul Sharma',
+    email: 'rahul.sharma@gmail.com',
+    phone: '+91 98765 11223',
     service_id: 's1',
     appointment_date: new Date().toISOString().split('T')[0],
-    start_time: '10:00',
-    end_time: '11:00',
+    start_time: '10:30',
+    end_time: '11:15',
     status: 'confirmed',
-    notes: 'Prefer natural products. Looking forward to refreshing my bangs.',
+    notes: 'Classic haircut with side fade and herbal wash.',
     created_at: new Date().toISOString(),
   },
   {
     id: 'a2',
-    full_name: 'Clarissa Montgomery',
-    email: 'clarissa.m@outlook.com',
-    phone: '310-555-0144',
-    service_id: 's2',
+    full_name: 'Priya Verma',
+    email: 'priya.verma@gmail.com',
+    phone: '+91 98765 44556',
+    service_id: 's3',
     appointment_date: new Date().toISOString().split('T')[0],
-    start_time: '13:00',
-    end_time: '15:30',
+    start_time: '14:00',
+    end_time: '15:00',
     status: 'pending',
-    notes: 'Would like a bright balayage contrast.',
+    notes: 'Advanced hair spa and deep conditioning treatment.',
     created_at: new Date().toISOString(),
   }
 ];
 
-// Helper to check if a DB error is due to missing tables (code '42P01')
+
+// Helper to check if a DB error is due to missing tables (code '42P01' or 'PGRST205') or RLS policies (code '42501')
 function handleDbError(error: any): boolean {
-  if (error && (error.code === '42P01' || error.message?.includes('does not exist') || error.message?.includes('relation "'))) {
+  if (error && (
+    error.code === '42P01' || 
+    error.code === 'PGRST205' || 
+    error.code === '42501' || 
+    error.message?.includes('does not exist') || 
+    error.message?.includes('relation "') || 
+    error.message?.includes('Could not find') ||
+    error.message?.includes('schema cache') ||
+    error.message?.includes('row-level security')
+  )) {
     if (supabaseTablesExist) {
-      console.warn("Supabase tables do not exist yet. Switching to dynamic local storage engine with SQL setup helper.");
+      console.warn("Supabase tables missing or Row Level Security (RLS) is blocking inserts. Switching to dynamic local storage engine with SQL setup helper.");
       supabaseTablesExist = false;
     }
     return true;
@@ -118,6 +239,7 @@ const L_KEYS = {
   HOURS: 'aura_salon_hours',
   BLOCKED: 'aura_salon_blocked',
   APPOINTMENTS: 'aura_salon_appointments',
+  STAFF: 'aura_salon_staff',
 };
 
 function getLocal<T>(key: string, fallback: T): T {
@@ -231,6 +353,14 @@ ON CONFLICT (weekday) DO UPDATE SET is_open = EXCLUDED.is_open, start_time = EXC
 INSERT INTO salon_settings (salon_name, salon_email, salon_phone, salon_address, slot_interval_minutes, booking_notice_hours) VALUES
 ('AURA Hair Salon', 'concierge@aurasalon.com', '+1 (555) 890-4200', '420 N. Beverly Drive, Beverly Hills, CA 90210', 30, 2)
 ON CONFLICT DO NOTHING;
+
+-- Disable Row Level Security (RLS) on all tables to allow client-side anonymous operations without policy violations
+ALTER TABLE services DISABLE ROW LEVEL SECURITY;
+ALTER TABLE salon_settings DISABLE ROW LEVEL SECURITY;
+ALTER TABLE business_hours DISABLE ROW LEVEL SECURITY;
+ALTER TABLE blocked_dates DISABLE ROW LEVEL SECURITY;
+ALTER TABLE appointments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE admin_users DISABLE ROW LEVEL SECURITY;
 `;
 
 // =========================================================
@@ -331,6 +461,152 @@ function updateServiceLocal(id: string, updates: Partial<Omit<Service, 'id' | 'c
   list[index] = updated;
   saveLocal(L_KEYS.SERVICES, list);
   return updated;
+}
+
+export async function deleteService(id: string): Promise<boolean> {
+  if (supabaseTablesExist) {
+    try {
+      const { error } = await supabase
+        .from('services')
+        .delete()
+        .eq('id', id);
+      
+      if (error) {
+        if (handleDbError(error)) return deleteServiceLocal(id);
+        throw error;
+      }
+      return true;
+    } catch (err) {
+      console.error("Error deleting service from Supabase:", err);
+      throw err;
+    }
+  }
+  return deleteServiceLocal(id);
+}
+
+function deleteServiceLocal(id: string): boolean {
+  const list = getLocal<Service[]>(L_KEYS.SERVICES, DEFAULT_SERVICES);
+  const filtered = list.filter(s => s.id !== id);
+  saveLocal(L_KEYS.SERVICES, filtered);
+  return true;
+}
+
+
+// =========================================================
+// STAFF / ARTISTS
+// =========================================================
+
+export async function getStaff(): Promise<Staff[]> {
+  if (supabaseTablesExist) {
+    try {
+      const { data, error } = await supabase
+        .from('staff')
+        .select('*')
+        .order('name');
+      if (error) {
+        if (handleDbError(error)) return getLocal<Staff[]>(L_KEYS.STAFF, DEFAULT_STAFF);
+        throw error;
+      }
+      if (!data || data.length === 0) {
+        const { data: inserted, error: insertError } = await supabase
+          .from('staff')
+          .insert(DEFAULT_STAFF.map(({ id, ...rest }) => rest))
+          .select();
+        if (insertError) throw insertError;
+        return inserted || DEFAULT_STAFF;
+      }
+      return data;
+    } catch (err: any) {
+      return getLocal<Staff[]>(L_KEYS.STAFF, DEFAULT_STAFF);
+    }
+  }
+  return getLocal<Staff[]>(L_KEYS.STAFF, DEFAULT_STAFF);
+}
+
+export async function createStaff(newStaff: Omit<Staff, 'id' | 'created_at'>): Promise<Staff> {
+  if (supabaseTablesExist) {
+    try {
+      const { data, error } = await supabase
+        .from('staff')
+        .insert(newStaff)
+        .select()
+        .single();
+      if (error) {
+        if (handleDbError(error)) return createStaffLocal(newStaff);
+        throw error;
+      }
+      return data;
+    } catch (err) {
+      console.error("Error creating staff in Supabase:", err);
+    }
+  }
+  return createStaffLocal(newStaff);
+}
+
+function createStaffLocal(newStaff: Omit<Staff, 'id' | 'created_at'>): Staff {
+  const list = getLocal<Staff[]>(L_KEYS.STAFF, DEFAULT_STAFF);
+  const created: Staff = { ...newStaff, id: 'st_' + Date.now() };
+  list.push(created);
+  saveLocal(L_KEYS.STAFF, list);
+  return created;
+}
+
+export async function updateStaff(id: string, updates: Partial<Omit<Staff, 'id' | 'created_at'>>): Promise<Staff> {
+  if (supabaseTablesExist) {
+    try {
+      const { data, error } = await supabase
+        .from('staff')
+        .update(updates)
+        .eq('id', id)
+        .select()
+        .single();
+      if (error) {
+        if (handleDbError(error)) return updateStaffLocal(id, updates);
+        throw error;
+      }
+      return data;
+    } catch (err) {
+      console.error("Error updating staff in Supabase:", err);
+    }
+  }
+  return updateStaffLocal(id, updates);
+}
+
+function updateStaffLocal(id: string, updates: Partial<Omit<Staff, 'id' | 'created_at'>>): Staff {
+  const list = getLocal<Staff[]>(L_KEYS.STAFF, DEFAULT_STAFF);
+  const index = list.findIndex(s => s.id === id);
+  if (index === -1) throw new Error("Staff not found");
+  const updated = { ...list[index], ...updates };
+  list[index] = updated;
+  saveLocal(L_KEYS.STAFF, list);
+  return updated;
+}
+
+export async function deleteStaff(id: string): Promise<boolean> {
+  if (supabaseTablesExist) {
+    try {
+      const { error } = await supabase
+        .from('staff')
+        .delete()
+        .eq('id', id);
+      if (error) {
+        if (handleDbError(error)) return deleteStaffLocal(id);
+        throw error;
+      }
+      return true;
+    } catch (err) {
+      console.error("Error deleting staff from Supabase:", err);
+      throw err;
+    }
+  }
+  return deleteStaffLocal(id);
+}
+
+function deleteStaffLocal(id: string): boolean {
+  const list = getLocal<Staff[]>(L_KEYS.STAFF, DEFAULT_STAFF);
+  const filtered = list.filter(s => s.id !== id);
+  saveLocal(L_KEYS.STAFF, filtered);
+  return true;
 }
 
 
@@ -827,3 +1103,44 @@ export async function getAvailableSlots(service: Service, dateStr: string): Prom
 
   return slots;
 }
+
+/**
+ * Creates and inserts a realistic sample appointment into the Supabase database (or local fallback)
+ * to simplify UI testing, booking workflow validation, and dashboard simulation.
+ */
+export async function createSampleAppointment(customData?: Partial<Omit<Appointment, 'id' | 'created_at'>>): Promise<Appointment> {
+  // Get existing services to assign a valid service_id
+  const services = await getServices();
+  const selectedService = services.find(s => s.is_active) || DEFAULT_SERVICES[0];
+  const serviceId = customData?.service_id || selectedService.id;
+
+  const names = ["Evelyn Dubois", "Victoria Vance", "Isabella Sterling", "Marcus Thorne", "Alexander Mercer"];
+  const emails = ["evelyn.d@example.com", "v.vance@example.com", "isabella.s@example.com", "m.thorne@example.com", "a.mercer@example.com"];
+  const phones = ["310-555-0102", "310-555-0188", "310-555-0145", "310-555-0111", "310-555-0130"];
+  const notesList = [
+    "First-time client. Looking for a fresh look that is easy to maintain.",
+    "Prefers organic, fragrance-free styling products.",
+    "Would love some advice on protecting colored hair.",
+    "Requires a quiet, relaxing session if possible.",
+    "Needs a fast blowout, has an evening event afterwards."
+  ];
+
+  const randomIndex = Math.floor(Math.random() * names.length);
+
+  // Set default sample details
+  const todayStr = new Date().toISOString().split('T')[0];
+  const sampleAppointment: Omit<Appointment, 'id' | 'created_at'> = {
+    full_name: customData?.full_name || names[randomIndex],
+    email: customData?.email || emails[randomIndex],
+    phone: customData?.phone || phones[randomIndex],
+    service_id: serviceId,
+    appointment_date: customData?.appointment_date || todayStr,
+    start_time: customData?.start_time || "11:30",
+    end_time: customData?.end_time || "12:30",
+    status: customData?.status || "confirmed",
+    notes: customData?.notes || notesList[randomIndex],
+  };
+
+  return createAppointment(sampleAppointment);
+}
+

@@ -3,19 +3,26 @@ import { supabase } from '../lib/supabase';
 import { 
   getAppointments, 
   getServices, 
+  getStaff,
   getBusinessHours, 
   getBlockedDates, 
   getSalonSettings,
   updateAppointmentStatus,
   createService,
   updateService,
+  deleteService,
+  createStaff,
+  updateStaff,
+  deleteStaff,
   updateBusinessHours,
   addBlockedDate,
   removeBlockedDate,
   updateSalonSettings,
-  areSupabaseTablesMissing
+  areSupabaseTablesMissing,
+  createSampleAppointment
 } from '../lib/dbService';
-import { Service, Appointment, BusinessHours, BlockedDate, SalonSettings } from '../types';
+import { Service, Appointment, BusinessHours, BlockedDate, SalonSettings, Staff } from '../types';
+import { BookingTrendsChart } from './BookingTrendsChart';
 import { 
   LayoutDashboard, 
   Calendar, 
@@ -48,7 +55,7 @@ interface AdminDashboardProps {
   onLogout: () => void;
 }
 
-type TabType = 'overview' | 'appointments' | 'services' | 'hours' | 'blocked' | 'settings';
+type TabType = 'overview' | 'appointments' | 'services' | 'staff' | 'hours' | 'blocked' | 'settings';
 
 export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
@@ -57,6 +64,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   // Core DB States
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [services, setServices] = useState<Service[]>([]);
+  const [staff, setStaff] = useState<Staff[]>([]);
   const [businessHours, setBusinessHours] = useState<BusinessHours[]>([]);
   const [blockedDates, setBlockedDates] = useState<BlockedDate[]>([]);
   const [settings, setSettings] = useState<SalonSettings | null>(null);
@@ -68,6 +76,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   // Search & Filter state for appointments page
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [dateFilter, setDateFilter] = useState<string>('');
 
   // Modals / Drawer States
   const [serviceModal, setServiceModal] = useState<{
@@ -75,6 +84,12 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     mode: 'add' | 'edit';
     service: Partial<Service> | null;
   }>({ isOpen: false, mode: 'add', service: null });
+
+  const [staffModal, setStaffModal] = useState<{
+    isOpen: boolean;
+    mode: 'add' | 'edit';
+    staffMember: Partial<Staff> | null;
+  }>({ isOpen: false, mode: 'add', staffMember: null });
 
   const [blockDateModal, setBlockDateModal] = useState({
     isOpen: false,
@@ -86,9 +101,10 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const loadDashboardData = async () => {
     try {
       setLoading(true);
-      const [allApps, allServs, hours, blocks, salonConf] = await Promise.all([
+      const [allApps, allServs, allStaff, hours, blocks, salonConf] = await Promise.all([
         getAppointments(),
         getServices(),
+        getStaff(),
         getBusinessHours(),
         getBlockedDates(),
         getSalonSettings()
@@ -96,6 +112,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
 
       setAppointments(allApps);
       setServices(allServs);
+      setStaff(allStaff);
       setBusinessHours(hours);
       setBlockedDates(blocks);
       setSettings(salonConf);
@@ -125,6 +142,39 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     onLogout();
   };
 
+  const getMonthlyRevenue = () => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth();
+
+    return appointments
+      .filter(app => {
+        if (app.status !== 'completed') return false;
+        const appDate = new Date(app.appointment_date + 'T00:00:00');
+        return appDate.getFullYear() === currentYear && appDate.getMonth() === currentMonth;
+      })
+      .reduce((sum, app) => {
+        const price = app.service?.price ?? services.find(s => s.id === app.service_id)?.price ?? 0;
+        return sum + price;
+      }, 0);
+  };
+
+  const getRevenueLast30Days = () => {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const thirtyDaysAgoStr = thirtyDaysAgo.toLocaleDateString('en-CA');
+
+    return appointments
+      .filter(app => {
+        if (app.status !== 'completed') return false;
+        return app.appointment_date >= thirtyDaysAgoStr;
+      })
+      .reduce((sum, app) => {
+        const price = app.service?.price ?? services.find(s => s.id === app.service_id)?.price ?? 0;
+        return sum + price;
+      }, 0);
+  };
+
   // =========================================================
   // ACTIONS - APPOINTMENTS
   // =========================================================
@@ -138,6 +188,20 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     } catch (err) {
       console.error(err);
       showToast('error', 'Could not update status.');
+    }
+  };
+
+  const handleInsertSampleAppointment = async () => {
+    try {
+      const newApp = await createSampleAppointment();
+      if (newApp) {
+        const allApps = await getAppointments();
+        setAppointments(allApps);
+        showToast('success', `Simulated test appointment for ${newApp.full_name} created successfully!`);
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('error', 'Could not generate simulated appointment.');
     }
   };
 
@@ -199,6 +263,102 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
       showToast('error', 'Could not update service status.');
     }
   };
+
+  const handleDeleteService = async (id: string, name: string) => {
+    if (!window.confirm(`Are you sure you want to permanently delete the service "${name}"? This action cannot be undone.`)) {
+      return;
+    }
+    try {
+      const success = await deleteService(id);
+      if (success) {
+        setServices(prev => prev.filter(s => s.id !== id));
+        showToast('success', `Service "${name}" was successfully removed.`);
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('error', 'Could not delete service. It may be referenced by existing appointments.');
+    }
+  };
+
+  // =========================================================
+  // ACTIONS - STAFF (MEET OUR ARTISTS)
+  // =========================================================
+  const handleSaveStaff = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const st = staffModal.staffMember;
+    if (!st || !st.name || !st.role) {
+      showToast('error', 'Please fill out artist name and role.');
+      return;
+    }
+
+    try {
+      if (staffModal.mode === 'add') {
+        const payload = {
+          name: st.name,
+          role: st.role,
+          experience: st.experience || '5+ Years Experience',
+          specialty: st.specialty || 'Hair Styling',
+          image_url: st.image_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&auto=format&fit=crop&q=80',
+          bio: st.bio || 'Professional salon stylist.',
+          is_active: st.is_active ?? true
+        };
+        const created = await createStaff(payload);
+        if (created) {
+          setStaff(prev => [created, ...prev]);
+          showToast('success', `Artist "${st.name}" added successfully.`);
+        }
+      } else {
+        const payload = {
+          name: st.name,
+          role: st.role,
+          experience: st.experience || '5+ Years Experience',
+          specialty: st.specialty || 'Hair Styling',
+          image_url: st.image_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&auto=format&fit=crop&q=80',
+          bio: st.bio || 'Professional salon stylist.',
+          is_active: st.is_active ?? true
+        };
+        const updated = await updateStaff(st.id!, payload);
+        if (updated) {
+          setStaff(prev => prev.map(item => item.id === st.id ? updated : item));
+          showToast('success', `Artist "${st.name}" updated successfully.`);
+        }
+      }
+      setStaffModal({ isOpen: false, mode: 'add', staffMember: null });
+    } catch (err) {
+      console.error(err);
+      showToast('error', 'Could not save artist profile.');
+    }
+  };
+
+  const handleToggleStaffActive = async (id: string, currentStatus: boolean) => {
+    try {
+      const updated = await updateStaff(id, { is_active: !currentStatus });
+      if (updated) {
+        setStaff(prev => prev.map(s => s.id === id ? { ...s, is_active: !currentStatus } : s));
+        showToast('success', `Artist profile visibility updated.`);
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('error', 'Could not update staff status.');
+    }
+  };
+
+  const handleDeleteStaff = async (id: string, name: string) => {
+    if (!window.confirm(`Are you sure you want to remove artist "${name}" from the salon team?`)) {
+      return;
+    }
+    try {
+      const success = await deleteStaff(id);
+      if (success) {
+        setStaff(prev => prev.filter(s => s.id !== id));
+        showToast('success', `Artist "${name}" removed.`);
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('error', 'Could not delete staff member.');
+    }
+  };
+
 
   // =========================================================
   // ACTIONS - BUSINESS HOURS
@@ -303,8 +463,9 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
         (app.service?.name || '').toLowerCase().includes(searchQuery.toLowerCase());
       
       const matchesStatus = statusFilter === 'all' || app.status === statusFilter;
+      const matchesDate = !dateFilter || app.appointment_date === dateFilter;
       
-      return matchesSearch && matchesStatus;
+      return matchesSearch && matchesStatus && matchesDate;
     });
   };
 
@@ -314,17 +475,8 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
     return d.toLocaleDateString('default', { month: 'short', day: 'numeric', year: 'numeric' });
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-[80vh] flex flex-col items-center justify-center gap-3">
-        <div className="w-12 h-12 border-4 border-[#C5A880]/20 border-t-[#C5A880] rounded-full animate-spin" />
-        <p className="text-sm font-semibold text-[#8B7E74]">Synchronizing administrative registers...</p>
-      </div>
-    );
-  }
-
   return (
-    <div className="min-h-[85vh] bg-[#FAF8F5] flex flex-col lg:flex-row border border-[#EADCC9]/50 rounded-2xl shadow-xl overflow-hidden relative">
+    <div className="min-h-[85vh] bg-[#F8F5F1] flex flex-col lg:flex-row border border-[#EAE3D9]/50 rounded-2xl shadow-xl overflow-hidden relative">
       
       {/* Toast Alert System */}
       {toastMsg && (
@@ -339,16 +491,16 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
       )}
 
       {/* Sidebar Navigation */}
-      <aside className="w-full lg:w-64 bg-[#3E3C3A] text-white shrink-0 flex flex-col justify-between border-r border-[#EADCC9]/10">
+      <aside className="w-full lg:w-64 bg-[#7C6A53] text-white shrink-0 flex flex-col justify-between border-r border-[#EAE3D9]/10">
         <div>
           {/* Header */}
-          <div className="p-6 border-b border-[#EADCC9]/10">
-            <span className="text-[10px] uppercase tracking-widest text-[#C5A880] font-bold">Admin Workspace</span>
+          <div className="p-6 border-b border-[#EAE3D9]/10">
+            <span className="text-[10px] uppercase tracking-widest text-[#A68A64] font-bold">Admin Workspace</span>
             <h3 className="font-serif-display text-xl font-bold tracking-wide mt-1 line-clamp-1 text-white">
               {salonName}
             </h3>
             {areSupabaseTablesMissing() && (
-              <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-[#FAF8F5]/10 text-[#C5A880]">
+              <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-[#F8F5F1]/10 text-[#A68A64]">
                 Local Storage Mode
               </span>
             )}
@@ -360,6 +512,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
               { id: 'overview', label: 'Console Overview', icon: LayoutDashboard },
               { id: 'appointments', label: 'Client Visits', icon: Calendar },
               { id: 'services', label: 'Ritual Services', icon: Scissors },
+              { id: 'staff', label: 'Meet Our Artists', icon: Users },
               { id: 'hours', label: 'Business Hours', icon: Clock },
               { id: 'blocked', label: 'Blocked Dates', icon: CalendarOff },
               { id: 'settings', label: 'Salon Settings', icon: Settings },
@@ -372,8 +525,8 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                   onClick={() => setActiveTab(tab.id as TabType)}
                   className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer ${
                     isSelected
-                      ? 'bg-[#C5A880] text-[#3E3C3A] font-bold shadow-md'
-                      : 'text-neutral-300 hover:bg-neutral-800 hover:text-white'
+                      ? 'bg-[#A68A64] text-white font-bold shadow-md'
+                      : 'text-neutral-300 hover:bg-white/10 hover:text-white'
                   }`}
                 >
                   <Icon className="w-4 h-4 shrink-0" />
@@ -385,14 +538,14 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
         </div>
 
         {/* User Block & Logout */}
-        <div className="p-4 border-t border-[#EADCC9]/10">
-          <div className="flex items-center gap-3 p-2 bg-[#FAF8F5]/5 rounded-lg mb-3">
-            <div className="w-8 h-8 rounded-full bg-[#C5A880] text-white flex items-center justify-center font-bold text-xs uppercase shadow-inner">
+        <div className="p-4 border-t border-[#EAE3D9]/10">
+          <div className="flex items-center gap-3 p-2 bg-[#F8F5F1]/5 rounded-lg mb-3">
+            <div className="w-8 h-8 rounded-full bg-[#A68A64] text-white flex items-center justify-center font-bold text-xs uppercase shadow-inner">
               M
             </div>
             <div>
               <p className="text-xs font-bold text-white uppercase tracking-wider">Manager</p>
-              <p className="text-[10px] text-[#EADCC9]/60 truncate max-w-[130px]">concierge@aurasalon.com</p>
+              <p className="text-[10px] text-[#EAE3D9]/60 truncate max-w-[130px]">concierge@aurasalon.com</p>
             </div>
           </div>
           <button
@@ -410,58 +563,153 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
 
         {/* Tab 1: OVERVIEW */}
         {activeTab === 'overview' && (
-          <div className="space-y-6">
+          loading ? (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 animate-pulse">
+                <div className="space-y-2">
+                  <div className="h-3 bg-[#7C6A53]/20 rounded w-48"></div>
+                  <div className="h-8 bg-[#2C2621]/20 rounded w-64"></div>
+                </div>
+                <div className="h-8 bg-white border border-[#EAE3D9]/40 rounded-lg w-36"></div>
+              </div>
+
+              {/* Skeletons for Metric Blocks */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 animate-pulse">
+                {[1, 2, 3, 4, 5, 6].map((i) => (
+                  <div key={i} className="bg-white border border-[#EAE3D9]/40 p-5 rounded-xl shadow-sm flex items-center justify-between">
+                    <div className="space-y-2.5 w-full">
+                      <div className="h-3 bg-neutral-200 rounded w-2/3"></div>
+                      <div className="h-7 bg-neutral-300 rounded w-1/3"></div>
+                      <div className="h-2.5 bg-neutral-200 rounded w-3/4"></div>
+                    </div>
+                    <div className="p-3 bg-neutral-100 rounded-lg text-neutral-300">
+                      <div className="w-5 h-5 bg-neutral-200 rounded"></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* D3 Booking Trends Chart Section */}
+              <div className="bg-white border border-[#EAE3D9]/50 rounded-xl p-6 shadow-sm animate-pulse space-y-4">
+                <div className="space-y-2">
+                  <div className="h-5 bg-neutral-300 rounded w-1/4"></div>
+                  <div className="h-3 bg-neutral-200 rounded w-1/3"></div>
+                </div>
+                <div className="w-full h-[280px] bg-neutral-50 rounded-lg flex items-end p-6 gap-2">
+                  {[40, 25, 60, 45, 80, 55, 30, 70, 50, 65, 35, 90, 75, 50, 40].map((h, idx) => (
+                    <div key={idx} className="bg-neutral-200 rounded-t w-full" style={{ height: `${h}%` }}></div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Secondary Panel: Split view for appointments list vs actions */}
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 animate-pulse">
+                {/* Upcoming timeline */}
+                <div className="xl:col-span-8 bg-white border border-[#EAE3D9]/50 rounded-xl p-5 shadow-sm space-y-4">
+                  <div className="h-5 bg-neutral-300 rounded w-1/3"></div>
+                  <div className="space-y-3">
+                    {[1, 2, 3].map((i) => (
+                      <div key={i} className="flex justify-between items-center p-3 bg-neutral-50 border border-[#EAE3D9]/20 rounded-lg">
+                        <div className="space-y-2 w-1/2">
+                          <div className="h-3.5 bg-neutral-300 rounded w-3/4"></div>
+                          <div className="h-2.5 bg-neutral-200 rounded w-1/2"></div>
+                          <div className="h-2 bg-neutral-200 rounded w-2/3"></div>
+                        </div>
+                        <div className="h-6 bg-neutral-200 rounded w-16"></div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Administrative Quick Controls */}
+                <div className="xl:col-span-4 bg-white border border-[#EAE3D9]/50 rounded-xl p-5 shadow-sm space-y-4">
+                  <div className="h-5 bg-neutral-300 rounded w-1/2"></div>
+                  <div className="space-y-3">
+                    {[1, 2, 3, 4].map((i) => (
+                      <div key={i} className="h-12 bg-neutral-50 border border-[#EAE3D9]/20 rounded-lg"></div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <div>
-                <span className="text-xs uppercase tracking-widest text-[#C5A880] font-bold">Consolidated Operations</span>
-                <h3 className="font-serif-display text-3xl font-bold text-[#3E3C3A] mt-0.5">Performance Console</h3>
+                <span className="text-xs uppercase tracking-widest text-[#A68A64] font-bold">Consolidated Operations</span>
+                <h3 className="font-serif-display text-3xl font-bold text-[#2C2621] mt-0.5">Performance Console</h3>
               </div>
-              <div className="text-xs text-[#8B7E74] font-medium bg-white px-3.5 py-1.5 rounded-lg border border-[#EADCC9]/40 self-start sm:self-auto shadow-sm">
+              <div className="text-xs text-[#7C6A53] font-medium bg-white px-3.5 py-1.5 rounded-lg border border-[#EAE3D9]/40 self-start sm:self-auto shadow-sm">
                 Live Server Status: <span className="font-bold text-emerald-600">Active</span>
               </div>
             </div>
 
             {/* Metric Blocks */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
               {[
                 { 
-                  label: 'Total Booked', 
-                  value: appointments.length, 
-                  desc: 'All booking entries', 
-                  color: 'from-[#FAF8F5] to-white border-[#EADCC9]/50 text-[#1F1E1D]',
-                  icon: Users
+                  label: "Today's Appointments", 
+                  value: appointments.filter(a => {
+                    const todayStr = new Date().toLocaleDateString('en-CA');
+                    return a.appointment_date === todayStr && a.status !== 'cancelled';
+                  }).length, 
+                  desc: 'Scheduled for today', 
+                  color: 'from-[#F8F5F1] to-white border-indigo-200 text-indigo-700 bg-indigo-50/10',
+                  icon: Clock
                 },
                 { 
-                  label: 'Pending Approval', 
+                  label: 'Pending Requests', 
                   value: appointments.filter(a => a.status === 'pending').length, 
                   desc: 'Requires review', 
-                  color: 'from-[#FAF8F5] to-white border-amber-200 text-amber-700 bg-amber-50/10',
+                  color: 'from-[#F8F5F1] to-white border-amber-200 text-amber-700 bg-amber-50/10',
                   icon: AlertCircle
                 },
                 { 
-                  label: 'Confirmed Visits', 
-                  value: appointments.filter(a => a.status === 'confirmed').length, 
-                  desc: 'Scheduled sessions', 
-                  color: 'from-[#FAF8F5] to-white border-emerald-200 text-emerald-700 bg-emerald-50/10',
+                  label: 'Upcoming Confirmed', 
+                  value: appointments.filter(a => {
+                    const todayStr = new Date().toLocaleDateString('en-CA');
+                    return a.status === 'confirmed' && a.appointment_date >= todayStr;
+                  }).length, 
+                  desc: 'Future active visits', 
+                  color: 'from-[#F8F5F1] to-white border-emerald-200 text-emerald-700 bg-emerald-50/10',
                   icon: Calendar
                 },
                 { 
-                  label: 'Bespoke Services', 
-                  value: services.filter(s => s.is_active).length, 
-                  desc: 'Active salon rituals', 
-                  color: 'from-[#FAF8F5] to-white border-[#C5A880]/30 text-[#C5A880]',
-                  icon: Scissors
+                  label: 'Completed (Last 30 Days)', 
+                  value: appointments.filter(a => {
+                    const thirtyDaysAgo = new Date();
+                    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+                    const thirtyDaysAgoStr = thirtyDaysAgo.toLocaleDateString('en-CA');
+                    return a.status === 'completed' && a.appointment_date >= thirtyDaysAgoStr;
+                  }).length, 
+                  desc: 'Processed in last 30 days', 
+                  color: 'from-[#F8F5F1] to-white border-[#A68A64]/30 text-[#A68A64]',
+                  icon: UserCheck
+                },
+                { 
+                  label: 'Total 30-Day Revenue', 
+                  value: `$${getRevenueLast30Days().toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 
+                  desc: 'Completed in last 30 days', 
+                  color: 'from-[#F8F5F1] to-white border-amber-300 text-amber-800 bg-amber-50/5',
+                  icon: DollarSign
+                },
+                { 
+                  label: 'Monthly Revenue', 
+                  value: `$${getMonthlyRevenue().toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, 
+                  desc: `Completed in ${new Date().toLocaleString('en-US', { month: 'long' })}`, 
+                  color: 'from-[#F8F5F1] to-white border-emerald-300 text-emerald-800 bg-emerald-50/5',
+                  icon: DollarSign
                 },
               ].map((m, idx) => {
                 const Icon = m.icon;
                 return (
                   <div key={idx} className={`bg-gradient-to-br ${m.color} border p-5 rounded-xl shadow-sm flex items-center justify-between`}>
                     <div>
-                      <span className="text-[10px] uppercase tracking-widest font-bold text-[#8B7E74] block">{m.label}</span>
-                      <p className="text-3xl font-bold font-serif-display mt-1">{m.value}</p>
-                      <span className="text-[10px] text-[#8B7E74] block mt-0.5">{m.desc}</span>
+                      <span className="text-[10px] uppercase tracking-widest font-bold text-[#7C6A53] block">{m.label}</span>
+                      <p className="text-2xl font-bold font-serif-display mt-1">{m.value}</p>
+                      <span className="text-[10px] text-[#7C6A53] block mt-0.5">{m.desc}</span>
                     </div>
-                    <div className="p-3 bg-[#3E3C3A]/5 rounded-lg text-[#C5A880] shrink-0">
+                    <div className="p-3 bg-[#7C6A53]/5 rounded-lg text-[#A68A64] shrink-0">
                       <Icon className="w-5 h-5" />
                     </div>
                   </div>
@@ -469,15 +717,32 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
               })}
             </div>
 
+            {/* D3 Booking Trends Chart Section */}
+            <div className="bg-white border border-[#EAE3D9]/50 rounded-xl p-6 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-[#EAE3D9]/30 mb-6">
+                <div>
+                  <h4 className="font-serif-display text-lg font-bold text-[#2C2621]">30-Day Client Booking Trends</h4>
+                  <p className="text-xs text-[#7C6A53] mt-0.5">D3.js visualization of daily active scheduled and completed bookings</p>
+                </div>
+                <div className="flex items-center gap-2 text-[11px] font-semibold text-[#7C6A53] bg-[#F8F5F1] border border-[#EAE3D9]/40 px-3 py-1 rounded-full">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#A68A64] inline-block"></span>
+                  Active Bookings
+                </div>
+              </div>
+              <div className="w-full h-[280px]">
+                <BookingTrendsChart appointments={appointments} />
+              </div>
+            </div>
+
             {/* Secondary Panel: Split view for appointments list vs actions */}
             <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
               {/* Upcoming timeline */}
-              <div className="xl:col-span-8 bg-white border border-[#EADCC9]/50 rounded-xl p-5 shadow-sm space-y-4">
-                <div className="flex items-center justify-between pb-3 border-b border-[#EADCC9]/30">
-                  <h4 className="font-serif-display text-lg font-bold text-[#3E3C3A]">Upcoming Client Itinerary</h4>
+              <div className="xl:col-span-8 bg-white border border-[#EAE3D9]/50 rounded-xl p-5 shadow-sm space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-[#EAE3D9]/30">
+                  <h4 className="font-serif-display text-lg font-bold text-[#2C2621]">Upcoming Client Itinerary</h4>
                   <button 
                     onClick={() => setActiveTab('appointments')}
-                    className="text-xs font-bold text-[#C5A880] hover:underline uppercase tracking-wider cursor-pointer"
+                    className="text-xs font-bold text-[#A68A64] hover:underline uppercase tracking-wider cursor-pointer"
                   >
                     View All
                   </button>
@@ -485,22 +750,22 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
 
                 <div className="space-y-3 max-h-[350px] overflow-y-auto pr-1">
                   {appointments.filter(a => a.status !== 'cancelled' && a.status !== 'completed').length === 0 ? (
-                    <div className="text-center py-10 text-[#8B7E74]">
-                      <Calendar className="w-8 h-8 mx-auto mb-2 text-[#C5A880]/30" />
+                    <div className="text-center py-10 text-[#7C6A53]">
+                      <Calendar className="w-8 h-8 mx-auto mb-2 text-[#A68A64]/30" />
                       <p className="text-xs font-semibold">No upcoming visits found.</p>
-                      <p className="text-[10px] mt-0.5 text-[#8B7E74]">All reservations are processed or completed.</p>
+                      <p className="text-[10px] mt-0.5 text-[#7C6A53]">All reservations are processed or completed.</p>
                     </div>
                   ) : (
                     appointments
                       .filter(a => a.status !== 'cancelled' && a.status !== 'completed')
                       .slice(0, 5)
                       .map(app => (
-                        <div key={app.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-3 bg-[#FAF8F5] border border-[#EADCC9]/30 rounded-lg gap-3">
+                        <div key={app.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-3 bg-[#F8F5F1] border border-[#EAE3D9]/30 rounded-lg gap-3">
                           <div className="space-y-0.5">
-                            <p className="text-xs font-bold text-[#1F1E1D] uppercase tracking-wider">{app.full_name}</p>
-                            <p className="text-[11px] text-[#C5A880] font-semibold">{app.service?.name}</p>
-                            <p className="text-[10px] text-[#8B7E74]">
-                              {formatDateStr(app.appointment_date)} at <span className="font-semibold text-[#3E3C3A]">{app.start_time.substring(0, 5)}</span>
+                            <p className="text-xs font-bold text-[#2C2621] uppercase tracking-wider">{app.full_name}</p>
+                            <p className="text-[11px] text-[#A68A64] font-semibold">{app.service?.name}</p>
+                            <p className="text-[10px] text-[#7C6A53]">
+                              {formatDateStr(app.appointment_date)} at <span className="font-semibold text-[#2C2621]">{app.start_time.substring(0, 5)}</span>
                             </p>
                           </div>
                           
@@ -525,7 +790,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                               )}
                               <button
                                 onClick={() => handleUpdateStatus(app.id, 'cancelled')}
-                                className="p-1 rounded-md bg-neutral-200 hover:bg-neutral-300 text-[#3E3C3A] transition-all cursor-pointer"
+                                className="p-1 rounded-md bg-neutral-200 hover:bg-neutral-300 text-[#2C2621] transition-all cursor-pointer"
                                 title="Cancel visit"
                               >
                                 <X className="w-3.5 h-3.5" />
@@ -539,81 +804,133 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
               </div>
 
               {/* Administrative Quick Controls */}
-              <div className="xl:col-span-4 bg-gradient-to-b from-white to-[#FAF8F5] border border-[#EADCC9]/50 rounded-xl p-5 shadow-sm flex flex-col justify-between">
+              <div className="xl:col-span-4 bg-gradient-to-b from-white to-[#F8F5F1] border border-[#EAE3D9]/50 rounded-xl p-5 shadow-sm flex flex-col justify-between">
                 <div>
-                  <h4 className="font-serif-display text-lg font-bold text-[#3E3C3A] pb-3 border-b border-[#EADCC9]/30 mb-4">
+                  <h4 className="font-serif-display text-lg font-bold text-[#2C2621] pb-3 border-b border-[#EAE3D9]/30 mb-4">
                     Quick Operations
                   </h4>
                   <div className="space-y-3.5">
                     <button
                       onClick={() => setServiceModal({ isOpen: true, mode: 'add', service: { name: '', description: '', duration_minutes: 60, price: 90, is_active: true } })}
-                      className="w-full inline-flex items-center justify-between p-3 rounded-lg border border-[#EADCC9] bg-white hover:border-[#C5A880] transition-all text-xs font-bold uppercase tracking-wider text-[#3E3C3A] cursor-pointer"
+                      className="w-full inline-flex items-center justify-between p-3 rounded-lg border border-[#EAE3D9] bg-white hover:border-[#A68A64] transition-all text-xs font-bold uppercase tracking-wider text-[#2C2621] cursor-pointer"
                     >
                       <span className="flex items-center gap-2">
-                        <Plus className="w-4 h-4 text-[#C5A880]" /> Insert Custom Ritual
+                        <Plus className="w-4 h-4 text-[#A68A64]" /> Insert Custom Ritual
                       </span>
-                      <ChevronRight className="w-4 h-4 text-[#8B7E74]" />
+                      <ChevronRight className="w-4 h-4 text-[#7C6A53]" />
+                    </button>
+
+                    <button
+                      onClick={handleInsertSampleAppointment}
+                      className="w-full inline-flex items-center justify-between p-3 rounded-lg border border-[#EAE3D9] bg-[#F8F5F1] hover:bg-[#EAE3D9] transition-all text-xs font-bold uppercase tracking-wider text-[#2C2621] cursor-pointer"
+                    >
+                      <span className="flex items-center gap-2">
+                        <Calendar className="w-4 h-4 text-[#A68A64]" /> Seed Test Appointment
+                      </span>
+                      <ChevronRight className="w-4 h-4 text-[#7C6A53]" />
                     </button>
 
                     <button
                       onClick={() => setBlockDateModal({ isOpen: true, dateStr: '', reason: '' })}
-                      className="w-full inline-flex items-center justify-between p-3 rounded-lg border border-[#EADCC9] bg-white hover:border-[#C5A880] transition-all text-xs font-bold uppercase tracking-wider text-[#3E3C3A] cursor-pointer"
+                      className="w-full inline-flex items-center justify-between p-3 rounded-lg border border-[#EAE3D9] bg-white hover:border-[#A68A64] transition-all text-xs font-bold uppercase tracking-wider text-[#2C2621] cursor-pointer"
                     >
                       <span className="flex items-center gap-2">
                         <CalendarOff className="w-4 h-4 text-red-500" /> Mark Rest Day / Block Date
                       </span>
-                      <ChevronRight className="w-4 h-4 text-[#8B7E74]" />
+                      <ChevronRight className="w-4 h-4 text-[#7C6A53]" />
                     </button>
 
                     <button
                       onClick={() => setActiveTab('settings')}
-                      className="w-full inline-flex items-center justify-between p-3 rounded-lg border border-[#EADCC9] bg-white hover:border-[#C5A880] transition-all text-xs font-bold uppercase tracking-wider text-[#3E3C3A] cursor-pointer"
+                      className="w-full inline-flex items-center justify-between p-3 rounded-lg border border-[#EAE3D9] bg-white hover:border-[#A68A64] transition-all text-xs font-bold uppercase tracking-wider text-[#2C2621] cursor-pointer"
                     >
                       <span className="flex items-center gap-2">
-                        <Settings className="w-4 h-4 text-[#8B7E74]" /> Edit Booking Bounds
+                        <Settings className="w-4 h-4 text-[#7C6A53]" /> Edit Booking Bounds
                       </span>
-                      <ChevronRight className="w-4 h-4 text-[#8B7E74]" />
+                      <ChevronRight className="w-4 h-4 text-[#7C6A53]" />
                     </button>
                   </div>
                 </div>
 
-                <div className="pt-6 border-t border-[#EADCC9]/40 mt-6 text-center text-[10px] text-[#8B7E74]">
+                <div className="pt-6 border-t border-[#EAE3D9]/40 mt-6 text-center text-[10px] text-[#7C6A53]">
                   AURA Management Engine v2.4 • Connected Securely
                 </div>
               </div>
             </div>
           </div>
+          )
         )}
 
         {/* Tab 2: APPOINTMENTS */}
         {activeTab === 'appointments' && (
           <div className="space-y-6">
             <div>
-              <span className="text-xs uppercase tracking-widest text-[#C5A880] font-bold">Client Logs</span>
-              <h3 className="font-serif-display text-3xl font-bold text-[#3E3C3A] mt-0.5">Appointment Reservations</h3>
+              <span className="text-xs uppercase tracking-widest text-[#A68A64] font-bold">Client Logs</span>
+              <h3 className="font-serif-display text-3xl font-bold text-[#2C2621] mt-0.5">Appointment Reservations</h3>
             </div>
 
-            {/* Search & Filter Toolbar */}
-            <div className="bg-white border border-[#EADCC9]/50 p-4 rounded-xl shadow-sm flex flex-col md:flex-row gap-4 justify-between">
+            {loading ? (
+              <>
+                {/* Search & Filter Toolbar Skeleton */}
+                <div className="bg-white border border-[#EAE3D9]/50 p-4 rounded-xl shadow-sm flex flex-col md:flex-row gap-4 justify-between animate-pulse">
+                  <div className="h-10 bg-neutral-100 border border-neutral-200 rounded-lg w-full max-w-md"></div>
+                  <div className="flex gap-2 w-full md:w-auto">
+                    <div className="h-10 bg-neutral-100 border border-neutral-200 rounded-lg w-32"></div>
+                    <div className="h-10 bg-neutral-100 border border-neutral-200 rounded-lg w-32"></div>
+                  </div>
+                </div>
+
+                {/* List Table Skeleton */}
+                <div className="bg-white border border-[#EAE3D9]/50 rounded-xl shadow-sm overflow-hidden animate-pulse">
+                  <div className="bg-[#F8F5F1] border-b border-[#EAE3D9]/50 px-6 py-4 flex justify-between">
+                    <div className="h-4 bg-neutral-300 rounded w-28"></div>
+                    <div className="h-4 bg-neutral-300 rounded w-24"></div>
+                  </div>
+                  <div className="divide-y divide-[#EAE3D9]/20">
+                    {[1, 2, 3, 4, 5].map((i) => (
+                      <div key={i} className="px-6 py-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div className="space-y-2 w-full sm:w-1/3">
+                          <div className="h-4 bg-neutral-300 rounded w-3/4"></div>
+                          <div className="h-3 bg-neutral-200 rounded w-1/2"></div>
+                          <div className="h-3 bg-neutral-200 rounded w-2/3"></div>
+                        </div>
+                        <div className="space-y-2 w-full sm:w-1/4">
+                          <div className="h-3.5 bg-neutral-300 rounded w-2/3"></div>
+                          <div className="h-3 bg-neutral-200 rounded w-1/2"></div>
+                        </div>
+                        <div className="space-y-1.5 w-full sm:w-1/4">
+                          <div className="h-3 bg-neutral-200 rounded w-2/3"></div>
+                          <div className="h-3 bg-neutral-100 rounded w-1/3"></div>
+                        </div>
+                        <div className="h-7 bg-neutral-200 rounded w-20"></div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* Search & Filter Toolbar */}
+            <div className="bg-white border border-[#EAE3D9]/50 p-4 rounded-xl shadow-sm flex flex-col md:flex-row gap-4 justify-between">
               {/* Search input */}
               <div className="relative flex-1 max-w-md">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#C5A880]" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#A68A64]" />
                 <input
                   type="text"
                   placeholder="Search by client, email, phone, or service..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-[#FAF8F5] border border-[#EADCC9] rounded-lg pl-9 pr-4 py-2 text-xs focus:outline-none focus:border-[#C5A880] text-[#1F1E1D]"
+                  className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg pl-9 pr-4 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621]"
                 />
               </div>
 
               {/* Filter controls */}
-              <div className="flex gap-2 self-start md:self-auto">
+              <div className="flex gap-2 self-start md:self-auto items-center">
                 <div className="relative">
                   <select
                     value={statusFilter}
                     onChange={(e) => setStatusFilter(e.target.value)}
-                    className="appearance-none bg-[#FAF8F5] border border-[#EADCC9] rounded-lg px-4 py-2 pr-8 text-xs font-semibold text-[#3E3C3A] focus:outline-none cursor-pointer"
+                    className="appearance-none bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-4 py-2 pr-8 text-xs font-semibold text-[#2C2621] focus:outline-none cursor-pointer"
                   >
                     <option value="all">All Statuses</option>
                     <option value="pending">Pending Approval</option>
@@ -621,17 +938,38 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                     <option value="cancelled">Cancelled</option>
                     <option value="completed">Completed</option>
                   </select>
-                  <Filter className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#C5A880] pointer-events-none" />
+                  <Filter className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#A68A64] pointer-events-none" />
                 </div>
+
+                <div className="relative">
+                  <input
+                    type="date"
+                    value={dateFilter}
+                    onChange={(e) => setDateFilter(e.target.value)}
+                    className="bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-1.5 text-xs font-semibold text-[#2C2621] focus:outline-none cursor-pointer"
+                  />
+                </div>
+
+                {(statusFilter !== 'all' || dateFilter !== '') && (
+                  <button
+                    onClick={() => {
+                      setStatusFilter('all');
+                      setDateFilter('');
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg border border-[#EAE3D9] hover:bg-[#F8F5F1] text-xs font-bold uppercase text-[#7C6A53] transition-all cursor-pointer"
+                  >
+                    Clear
+                  </button>
+                )}
               </div>
             </div>
 
             {/* List Table */}
-            <div className="bg-white border border-[#EADCC9]/50 rounded-xl shadow-sm overflow-hidden">
+            <div className="bg-white border border-[#EAE3D9]/50 rounded-xl shadow-sm overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="bg-[#FAF8F5] border-b border-[#EADCC9]/50 text-[10px] font-bold text-[#8B7E74] uppercase tracking-wider">
+                    <tr className="bg-[#F8F5F1] border-b border-[#EAE3D9]/50 text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider">
                       <th className="px-6 py-4">Client Detail</th>
                       <th className="px-6 py-4">Reserved Ritual</th>
                       <th className="px-6 py-4">Date & Time</th>
@@ -640,30 +978,30 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                       <th className="px-6 py-4 text-right">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#EADCC9]/20 text-xs">
+                  <tbody className="divide-y divide-[#EAE3D9]/20 text-xs">
                     {getFilteredAppointments().length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="text-center py-20 text-[#8B7E74]">
-                          <Calendar className="w-10 h-10 mx-auto mb-2 text-[#C5A880]/30" />
+                        <td colSpan={6} className="text-center py-20 text-[#7C6A53]">
+                          <Calendar className="w-10 h-10 mx-auto mb-2 text-[#A68A64]/30" />
                           <p className="font-semibold">No appointments found matching constraints.</p>
                           <p className="text-[10px] mt-0.5">Modify your search query or check different filters.</p>
                         </td>
                       </tr>
                     ) : (
                       getFilteredAppointments().map(app => (
-                        <tr key={app.id} className="hover:bg-[#FAF8F5]/40 transition-colors">
+                        <tr key={app.id} className="hover:bg-[#F8F5F1]/40 transition-colors">
                           <td className="px-6 py-4">
-                            <div className="font-bold text-[#1F1E1D] uppercase tracking-wider">{app.full_name}</div>
-                            <div className="text-[10px] text-[#8B7E74]">{app.email}</div>
-                            <div className="text-[10px] text-[#8B7E74]">{app.phone}</div>
+                            <div className="font-bold text-[#2C2621] uppercase tracking-wider">{app.full_name}</div>
+                            <div className="text-[10px] text-[#7C6A53]">{app.email}</div>
+                            <div className="text-[10px] text-[#7C6A53]">{app.phone}</div>
                           </td>
                           <td className="px-6 py-4">
-                            <span className="font-semibold text-[#C5A880]">{app.service?.name || 'Unassigned service'}</span>
-                            <div className="text-[10px] text-[#8B7E74]">{app.service?.duration_minutes} Mins • ${app.service?.price}</div>
+                            <span className="font-semibold text-[#A68A64]">{app.service?.name || 'Unassigned service'}</span>
+                            <div className="text-[10px] text-[#7C6A53]">{app.service?.duration_minutes} Mins • ₹{app.service?.price}</div>
                           </td>
                           <td className="px-6 py-4">
-                            <div className="font-medium text-[#3E3C3A]">{formatDateStr(app.appointment_date)}</div>
-                            <div className="text-[10px] text-[#8B7E74] font-mono">{app.start_time.substring(0, 5)} - {app.end_time.substring(0, 5)}</div>
+                            <div className="font-medium text-[#2C2621]">{formatDateStr(app.appointment_date)}</div>
+                            <div className="text-[10px] text-[#7C6A53] font-mono">{app.start_time.substring(0, 5)} - {app.end_time.substring(0, 5)}</div>
                           </td>
                           <td className="px-6 py-4">
                             <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold uppercase border ${
@@ -716,6 +1054,8 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                 </table>
               </div>
             </div>
+          </>
+          )}
           </div>
         )}
 
@@ -724,8 +1064,8 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <div>
-                <span className="text-xs uppercase tracking-widest text-[#C5A880] font-bold">Catalog Management</span>
-                <h3 className="font-serif-display text-3xl font-bold text-[#3E3C3A] mt-0.5">Styling & Cut Rituals</h3>
+                <span className="text-xs uppercase tracking-widest text-[#A68A64] font-bold">Catalog Management</span>
+                <h3 className="font-serif-display text-3xl font-bold text-[#2C2621] mt-0.5">Styling & Cut Rituals</h3>
               </div>
               
               <button
@@ -734,19 +1074,45 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                   mode: 'add',
                   service: { name: '', description: '', duration_minutes: 60, price: 95, is_active: true }
                 })}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#3E3C3A] hover:bg-[#1F1E1D] text-white transition-all font-bold text-xs uppercase tracking-wider shadow-sm cursor-pointer self-start sm:self-auto"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#7C6A53] hover:bg-[#5A4D3F] text-white transition-all font-bold text-xs uppercase tracking-wider shadow-sm cursor-pointer self-start sm:self-auto"
               >
                 <Plus className="w-4 h-4" />
                 <span>Create New Service</span>
               </button>
             </div>
 
-            {/* List Table */}
-            <div className="bg-white border border-[#EADCC9]/50 rounded-xl shadow-sm overflow-hidden">
+            {loading ? (
+              <div className="bg-white border border-[#EAE3D9]/50 rounded-xl shadow-sm overflow-hidden animate-pulse">
+                <div className="bg-[#F8F5F1] border-b border-[#EAE3D9]/50 px-6 py-4 flex justify-between">
+                  <div className="h-4 bg-neutral-300 rounded w-28"></div>
+                  <div className="h-4 bg-neutral-300 rounded w-24"></div>
+                </div>
+                <div className="divide-y divide-[#EAE3D9]/20">
+                  {[1, 2, 3, 4].map((i) => (
+                    <div key={i} className="px-6 py-5 flex items-center justify-between gap-4">
+                      <div className="space-y-2 w-1/2">
+                        <div className="h-4.5 bg-neutral-300 rounded w-1/3"></div>
+                        <div className="h-3 bg-neutral-200 rounded w-3/4"></div>
+                      </div>
+                      <div className="h-4 bg-neutral-300 rounded w-20"></div>
+                      <div className="h-4.5 bg-neutral-300 rounded w-12"></div>
+                      <div className="h-5 bg-neutral-200 rounded-full w-16"></div>
+                      <div className="flex gap-2">
+                        <div className="h-8 bg-neutral-100 rounded w-12"></div>
+                        <div className="h-8 bg-neutral-100 rounded w-12"></div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* List Table */}
+            <div className="bg-white border border-[#EAE3D9]/50 rounded-xl shadow-sm overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="bg-[#FAF8F5] border-b border-[#EADCC9]/50 text-[10px] font-bold text-[#8B7E74] uppercase tracking-wider">
+                    <tr className="bg-[#F8F5F1] border-b border-[#EAE3D9]/50 text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider">
                       <th className="px-6 py-4">Service Ritual</th>
                       <th className="px-6 py-4">Duration</th>
                       <th className="px-6 py-4">Price</th>
@@ -754,20 +1120,20 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                       <th className="px-6 py-4 text-right">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#EADCC9]/20 text-xs">
+                  <tbody className="divide-y divide-[#EAE3D9]/20 text-xs">
                     {services.map(service => (
-                      <tr key={service.id} className={`hover:bg-[#FAF8F5]/40 transition-colors ${!service.is_active ? 'bg-neutral-50/50' : ''}`}>
+                      <tr key={service.id} className={`hover:bg-[#F8F5F1]/40 transition-colors ${!service.is_active ? 'bg-neutral-50/50' : ''}`}>
                         <td className="px-6 py-4">
-                          <div className="font-bold text-[#3E3C3A] text-sm">{service.name}</div>
-                          <p className="text-[11px] text-[#8B7E74] leading-relaxed max-w-md mt-1 italic">
+                          <div className="font-bold text-[#2C2621] text-sm">{service.name}</div>
+                          <p className="text-[11px] text-[#7C6A53] leading-relaxed max-w-md mt-1 italic">
                             {service.description || 'No description provided.'}
                           </p>
                         </td>
-                        <td className="px-6 py-4 font-semibold text-[#1F1E1D]">
+                        <td className="px-6 py-4 font-semibold text-[#2C2621]">
                           {service.duration_minutes} Minutes
                         </td>
-                        <td className="px-6 py-4 font-bold text-[#C5A880] text-sm">
-                          ${service.price}
+                        <td className="px-6 py-4 font-bold text-[#A68A64] text-sm">
+                          ₹{service.price}
                         </td>
                         <td className="px-6 py-4">
                           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${
@@ -786,7 +1152,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                                 mode: 'edit',
                                 service: { ...service }
                               })}
-                              className="p-1.5 rounded bg-white hover:bg-[#FAF8F5] border border-[#EADCC9] text-[#3E3C3A] transition-all cursor-pointer"
+                              className="p-1.5 rounded bg-white hover:bg-[#F8F5F1] border border-[#EAE3D9] text-[#2C2621] transition-all cursor-pointer"
                               title="Edit Details"
                             >
                               <Edit className="w-3.5 h-3.5" />
@@ -803,6 +1169,14 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                             >
                               {service.is_active ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                             </button>
+
+                            <button
+                              onClick={() => handleDeleteService(service.id, service.name)}
+                              className="p-1.5 rounded bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 transition-all cursor-pointer"
+                              title="Delete Service"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -811,6 +1185,112 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                 </table>
               </div>
             </div>
+          </>
+          )}
+          </div>
+        )}
+
+        {/* Tab: STAFF (MEET OUR ARTISTS) */}
+        {activeTab === 'staff' && (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div>
+                <span className="text-xs uppercase tracking-widest text-[#A68A64] font-bold">Team Management</span>
+                <h3 className="font-serif-display text-3xl font-bold text-[#2C2621] mt-0.5">Meet Our Artists</h3>
+              </div>
+              
+              <button
+                onClick={() => setStaffModal({
+                  isOpen: true,
+                  mode: 'add',
+                  staffMember: { name: '', role: 'Senior Stylist', experience: '8+ Years Experience', specialty: 'Hair Styling & Color', image_url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&auto=format&fit=crop&q=80', bio: 'Experienced professional stylist.', is_active: true }
+                })}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#7C6A53] hover:bg-[#5A4D3F] text-white transition-all font-bold text-xs uppercase tracking-wider shadow-sm cursor-pointer self-start sm:self-auto"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add Staff Member</span>
+              </button>
+            </div>
+
+            {loading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-pulse">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="bg-white border border-[#EAE3D9]/50 p-6 rounded-2xl shadow-sm space-y-4">
+                    <div className="w-20 h-20 rounded-2xl bg-neutral-200 mx-auto"></div>
+                    <div className="h-5 bg-neutral-300 rounded w-1/2 mx-auto"></div>
+                    <div className="h-3 bg-neutral-200 rounded w-1/3 mx-auto"></div>
+                    <div className="h-12 bg-neutral-100 rounded"></div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {staff.map((artist) => (
+                  <div key={artist.id} className="bg-white border border-[#EAE3D9]/60 rounded-2xl p-6 shadow-sm flex flex-col justify-between">
+                    <div>
+                      <div className="relative w-20 h-20 rounded-2xl overflow-hidden mx-auto mb-4 border border-[#EAE3D9] shadow-sm">
+                        <img 
+                          src={artist.image_url} 
+                          alt={artist.name} 
+                          className="w-full h-full object-cover"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+
+                      <div className="text-center mb-3">
+                        <h4 className="font-serif-display text-lg font-bold text-[#2C2621]">{artist.name}</h4>
+                        <p className="text-xs font-bold text-[#A68A64] uppercase tracking-wider mt-0.5">{artist.role}</p>
+                        <span className="inline-block mt-2 px-2.5 py-1 rounded-full bg-[#F8F5F1] text-[10px] font-bold text-[#7C6A53] border border-[#EAE3D9]">
+                          {artist.experience}
+                        </span>
+                      </div>
+
+                      <p className="text-xs text-[#7C6A53] leading-relaxed text-center mb-4 italic">
+                        "{artist.bio}"
+                      </p>
+                    </div>
+
+                    <div className="pt-4 border-t border-[#EAE3D9]/40 space-y-3">
+                      <p className="text-[11px] font-semibold text-[#2C2621] text-center">Specialty: <span className="text-[#A68A64]">{artist.specialty}</span></p>
+
+                      <div className="flex items-center justify-between pt-2">
+                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${
+                          artist.is_active ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-neutral-100 text-neutral-500'
+                        }`}>
+                          {artist.is_active ? 'Active on Site' : 'Hidden'}
+                        </span>
+
+                        <div className="flex gap-1.5">
+                          <button
+                            onClick={() => setStaffModal({ isOpen: true, mode: 'edit', staffMember: { ...artist } })}
+                            className="p-1.5 rounded bg-white hover:bg-[#F8F5F1] border border-[#EAE3D9] text-[#2C2621] transition-all cursor-pointer"
+                            title="Edit Profile"
+                          >
+                            <Edit className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleToggleStaffActive(artist.id, artist.is_active)}
+                            className={`p-1.5 rounded border transition-all cursor-pointer ${
+                              artist.is_active ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            }`}
+                            title={artist.is_active ? 'Hide from site' : 'Show on site'}
+                          >
+                            {artist.is_active ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                          </button>
+                          <button
+                            onClick={() => handleDeleteStaff(artist.id, artist.name)}
+                            className="p-1.5 rounded bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 transition-all cursor-pointer"
+                            title="Remove Artist"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -818,19 +1298,40 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
         {activeTab === 'hours' && (
           <div className="space-y-6">
             <div>
-              <span className="text-xs uppercase tracking-widest text-[#C5A880] font-bold">Stylist Schedules</span>
-              <h3 className="font-serif-display text-3xl font-bold text-[#3E3C3A] mt-0.5">Salon Business Hours</h3>
-              <p className="text-xs text-[#8B7E74] mt-1 leading-relaxed">
+              <span className="text-xs uppercase tracking-widest text-[#A68A64] font-bold">Stylist Schedules</span>
+              <h3 className="font-serif-display text-3xl font-bold text-[#2C2621] mt-0.5">Salon Business Hours</h3>
+              <p className="text-xs text-[#7C6A53] mt-1 leading-relaxed">
                 Toggling these schedules directly affects live reservation availability on the calendar page. Time inputs must follow 24H formatting.
               </p>
             </div>
 
-            <div className="bg-white border border-[#EADCC9]/50 rounded-xl shadow-sm overflow-hidden">
-              <div className="divide-y divide-[#EADCC9]/20">
+            {loading ? (
+              <div className="bg-white border border-[#EAE3D9]/50 rounded-xl shadow-sm overflow-hidden divide-y divide-[#EAE3D9]/20 animate-pulse">
+                {[1, 2, 3, 4, 5, 6, 7].map((i) => (
+                  <div key={i} className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                    <div className="flex items-center gap-3 w-1/3">
+                      <div className="w-9 h-5 bg-neutral-200 rounded-full"></div>
+                      <div className="space-y-1.5 w-full">
+                        <div className="h-4 bg-neutral-300 rounded w-1/2"></div>
+                        <div className="h-2.5 bg-neutral-200 rounded w-1/3"></div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div className="h-9 bg-neutral-100 rounded w-24"></div>
+                      <div className="h-4 bg-neutral-200 rounded w-4"></div>
+                      <div className="h-9 bg-neutral-100 rounded w-24"></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <>
+                <div className="bg-white border border-[#EAE3D9]/50 rounded-xl shadow-sm overflow-hidden">
+              <div className="divide-y divide-[#EAE3D9]/20">
                 {businessHours.map(hour => {
                   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
                   return (
-                    <div key={hour.id} className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white hover:bg-[#FAF8F5]/30 transition-all">
+                    <div key={hour.id} className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-white hover:bg-[#F8F5F1]/30 transition-all">
                       {/* Weekday Info */}
                       <div className="flex items-center gap-3">
                         <label className="relative inline-flex items-center cursor-pointer">
@@ -840,10 +1341,10 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                             onChange={(e) => handleHourToggle(hour.id, e.target.checked)}
                             className="sr-only peer"
                           />
-                          <div className="w-9 h-5 bg-neutral-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#C5A880]"></div>
+                          <div className="w-9 h-5 bg-neutral-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#A68A64]"></div>
                         </label>
                         <div>
-                          <span className="text-sm font-bold text-[#3E3C3A] uppercase tracking-wider">{dayNames[hour.weekday]}</span>
+                          <span className="text-sm font-bold text-[#2C2621] uppercase tracking-wider">{dayNames[hour.weekday]}</span>
                           <span className={`text-[10px] block font-semibold uppercase tracking-wider ${hour.is_open ? 'text-emerald-600' : 'text-neutral-400'}`}>
                             {hour.is_open ? 'Open for bookings' : 'Closed'}
                           </span>
@@ -854,24 +1355,24 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                       {hour.is_open ? (
                         <div className="flex items-center gap-2.5">
                           <div>
-                            <span className="block text-[9px] uppercase tracking-widest text-[#8B7E74] font-bold mb-1">Opens</span>
+                            <span className="block text-[9px] uppercase tracking-widest text-[#7C6A53] font-bold mb-1">Opens</span>
                             <input
                               type="time"
                               required
                               value={hour.start_time.substring(0, 5)}
                               onChange={(e) => handleHourTimeChange(hour.id, 'start', e.target.value)}
-                              className="bg-[#FAF8F5] border border-[#EADCC9] rounded px-2.5 py-1 text-xs font-semibold focus:outline-none text-[#1F1E1D]"
+                              className="bg-[#F8F5F1] border border-[#EAE3D9] rounded px-2.5 py-1 text-xs font-semibold focus:outline-none text-[#2C2621]"
                             />
                           </div>
                           <span className="text-neutral-300 mt-4">—</span>
                           <div>
-                            <span className="block text-[9px] uppercase tracking-widest text-[#8B7E74] font-bold mb-1">Closes</span>
+                            <span className="block text-[9px] uppercase tracking-widest text-[#7C6A53] font-bold mb-1">Closes</span>
                             <input
                               type="time"
                               required
                               value={hour.end_time.substring(0, 5)}
                               onChange={(e) => handleHourTimeChange(hour.id, 'end', e.target.value)}
-                              className="bg-[#FAF8F5] border border-[#EADCC9] rounded px-2.5 py-1 text-xs font-semibold focus:outline-none text-[#1F1E1D]"
+                              className="bg-[#F8F5F1] border border-[#EAE3D9] rounded px-2.5 py-1 text-xs font-semibold focus:outline-none text-[#2C2621]"
                             />
                           </div>
                         </div>
@@ -883,6 +1384,8 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                 })}
               </div>
             </div>
+          </>
+          )}
           </div>
         )}
 
@@ -891,24 +1394,39 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <div>
-                <span className="text-xs uppercase tracking-widest text-[#C5A880] font-bold">Reservation Safety Bounds</span>
-                <h3 className="font-serif-display text-3xl font-bold text-[#3E3C3A] mt-0.5">Blocked Dates</h3>
+                <span className="text-xs uppercase tracking-widest text-[#A68A64] font-bold">Reservation Safety Bounds</span>
+                <h3 className="font-serif-display text-3xl font-bold text-[#2C2621] mt-0.5">Blocked Dates</h3>
               </div>
 
               <button
                 onClick={() => setBlockDateModal({ isOpen: true, dateStr: '', reason: '' })}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#3E3C3A] hover:bg-[#1F1E1D] text-white transition-all font-bold text-xs uppercase tracking-wider shadow-sm cursor-pointer self-start sm:self-auto"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#7C6A53] hover:bg-[#5A4D3F] text-white transition-all font-bold text-xs uppercase tracking-wider shadow-sm cursor-pointer self-start sm:self-auto"
               >
                 <Plus className="w-4 h-4" />
                 <span>Block Specific Date</span>
               </button>
             </div>
 
-            {/* List */}
+            {loading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 animate-pulse">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="bg-white border border-[#EAE3D9]/50 p-5 rounded-xl shadow-sm flex items-start justify-between gap-4">
+                    <div className="space-y-3 w-3/4">
+                      <div className="h-5.5 bg-neutral-200 rounded w-1/2"></div>
+                      <div className="h-3 bg-neutral-300 rounded w-1/4"></div>
+                      <div className="h-3.5 bg-neutral-200 rounded w-full"></div>
+                    </div>
+                    <div className="h-8 bg-neutral-100 rounded w-8"></div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <>
+                {/* List */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {blockedDates.length === 0 ? (
-                <div className="col-span-full bg-white border border-[#EADCC9]/50 rounded-xl p-10 text-center text-[#8B7E74] shadow-sm">
-                  <CalendarOff className="w-10 h-10 text-[#C5A880]/30 mx-auto mb-2" />
+                <div className="col-span-full bg-white border border-[#EAE3D9]/50 rounded-xl p-10 text-center text-[#7C6A53] shadow-sm">
+                  <CalendarOff className="w-10 h-10 text-[#A68A64]/30 mx-auto mb-2" />
                   <p className="font-semibold">No dates are currently blocked.</p>
                   <p className="text-[10px] mt-0.5">The salon operates on standard weekday schedules defined in Business Hours.</p>
                 </div>
@@ -919,8 +1437,8 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                       <span className="text-xs font-bold text-red-700 bg-red-50 border border-red-100 px-2.5 py-0.5 rounded-full uppercase tracking-wider">
                         {formatDateStr(item.blocked_date)}
                       </span>
-                      <p className="text-xs font-semibold text-[#3E3C3A] mt-2">Reason</p>
-                      <p className="text-xs text-[#8B7E74] italic leading-relaxed">
+                      <p className="text-xs font-semibold text-[#2C2621] mt-2">Reason</p>
+                      <p className="text-xs text-[#7C6A53] italic leading-relaxed">
                         "{item.reason || 'Rest day, holiday or private stylist training event.'}"
                       </p>
                     </div>
@@ -936,6 +1454,8 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                 ))
               )}
             </div>
+          </>
+          )}
           </div>
         )}
 
@@ -943,15 +1463,35 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
         {activeTab === 'settings' && (
           <div className="space-y-6">
             <div>
-              <span className="text-xs uppercase tracking-widest text-[#C5A880] font-bold">Identity & Rule Bounds</span>
-              <h3 className="font-serif-display text-3xl font-bold text-[#3E3C3A] mt-0.5">Salon Configuration</h3>
+              <span className="text-xs uppercase tracking-widest text-[#A68A64] font-bold">Identity & Rule Bounds</span>
+              <h3 className="font-serif-display text-3xl font-bold text-[#2C2621] mt-0.5">Salon Configuration</h3>
             </div>
 
-            {settings && (
-              <form onSubmit={handleSaveSettings} className="bg-white border border-[#EADCC9]/50 rounded-xl shadow-sm p-6 sm:p-8 space-y-6 max-w-2xl">
+            {loading ? (
+              <div className="bg-white border border-[#EAE3D9]/50 rounded-xl shadow-sm p-6 sm:p-8 space-y-6 max-w-2xl animate-pulse">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                  {[1, 2, 3, 4].map((i) => (
+                    <div key={i} className="space-y-2">
+                      <div className="h-3 bg-neutral-300 rounded w-1/3"></div>
+                      <div className="h-10 bg-neutral-100 border border-neutral-200 rounded-lg w-full"></div>
+                    </div>
+                  ))}
+                </div>
+                <div className="space-y-2">
+                  <div className="h-3 bg-neutral-300 rounded w-1/6"></div>
+                  <div className="h-20 bg-neutral-100 border border-neutral-200 rounded-lg w-full"></div>
+                </div>
+                <div className="pt-4 border-t border-[#EAE3D9]/30 flex justify-end">
+                  <div className="h-10 bg-neutral-300 rounded-full w-36"></div>
+                </div>
+              </div>
+            ) : (
+              <>
+                {settings && (
+              <form onSubmit={handleSaveSettings} className="bg-white border border-[#EAE3D9]/50 rounded-xl shadow-sm p-6 sm:p-8 space-y-6 max-w-2xl">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                   <div>
-                    <label className="block text-[10px] font-bold text-[#8B7E74] uppercase tracking-wider mb-1.5">
+                    <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1.5">
                       Salon Branding Name
                     </label>
                     <input
@@ -959,12 +1499,12 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                       required
                       value={settings.salon_name}
                       onChange={(e) => setSettings({ ...settings, salon_name: e.target.value })}
-                      className="w-full bg-[#FAF8F5] border border-[#EADCC9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#C5A880] text-[#1F1E1D] font-bold uppercase tracking-wider"
+                      className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621] font-bold uppercase tracking-wider"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold text-[#8B7E74] uppercase tracking-wider mb-1.5">
+                    <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1.5">
                       Support Email
                     </label>
                     <input
@@ -972,12 +1512,12 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                       required
                       value={settings.salon_email}
                       onChange={(e) => setSettings({ ...settings, salon_email: e.target.value })}
-                      className="w-full bg-[#FAF8F5] border border-[#EADCC9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#C5A880] text-[#1F1E1D]"
+                      className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621]"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold text-[#8B7E74] uppercase tracking-wider mb-1.5">
+                    <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1.5">
                       Contact Phone
                     </label>
                     <input
@@ -985,18 +1525,18 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                       required
                       value={settings.salon_phone}
                       onChange={(e) => setSettings({ ...settings, salon_phone: e.target.value })}
-                      className="w-full bg-[#FAF8F5] border border-[#EADCC9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#C5A880] text-[#1F1E1D]"
+                      className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621]"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold text-[#8B7E74] uppercase tracking-wider mb-1.5">
+                    <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1.5">
                       Booking Interval (Minutes)
                     </label>
                     <select
                       value={settings.slot_interval_minutes}
                       onChange={(e) => setSettings({ ...settings, slot_interval_minutes: Number(e.target.value) })}
-                      className="w-full bg-[#FAF8F5] border border-[#EADCC9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#C5A880] text-[#1F1E1D] font-medium"
+                      className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621] font-medium"
                     >
                       <option value="15">15 Minutes</option>
                       <option value="30">30 Minutes</option>
@@ -1006,7 +1546,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold text-[#8B7E74] uppercase tracking-wider mb-1.5">
+                    <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1.5">
                       Min Notice Period (Hours)
                     </label>
                     <input
@@ -1015,13 +1555,13 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                       min={0}
                       value={settings.booking_notice_hours}
                       onChange={(e) => setSettings({ ...settings, booking_notice_hours: Number(e.target.value) })}
-                      className="w-full bg-[#FAF8F5] border border-[#EADCC9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#C5A880] text-[#1F1E1D]"
+                      className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621]"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-[#8B7E74] uppercase tracking-wider mb-1.5">
+                  <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1.5">
                     Salon Physical Address
                   </label>
                   <textarea
@@ -1029,31 +1569,33 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                     required
                     value={settings.salon_address}
                     onChange={(e) => setSettings({ ...settings, salon_address: e.target.value })}
-                    className="w-full bg-[#FAF8F5] border border-[#EADCC9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#C5A880] text-[#1F1E1D]"
+                    className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621]"
                   />
                 </div>
 
-                <div className="border-t border-[#EADCC9]/30 pt-4 flex justify-end">
+                <div className="border-t border-[#EAE3D9]/30 pt-4 flex justify-end">
                   <button
                     type="submit"
-                    className="inline-flex items-center gap-1.5 px-6 py-2.5 rounded-full bg-[#3E3C3A] hover:bg-[#1F1E1D] text-white transition-all font-bold text-xs uppercase tracking-wider cursor-pointer shadow-sm"
+                    className="inline-flex items-center gap-1.5 px-6 py-2.5 rounded-full bg-[#7C6A53] hover:bg-[#5A4D3F] text-white transition-all font-bold text-xs uppercase tracking-wider cursor-pointer shadow-sm"
                   >
-                    <Check className="w-4 h-4 text-[#C5A880]" />
+                    <Check className="w-4 h-4 text-[#A68A64]" />
                     <span>Save Configuration</span>
                   </button>
                 </div>
               </form>
             )}
+          </>
+          )}
           </div>
         )}
       </main>
 
       {/* MODAL / DRAWER - SERVICE CREATE & UPDATE */}
       {serviceModal.isOpen && serviceModal.service && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#1F1E1D]/60 backdrop-blur-xs">
-          <div className="w-full max-w-lg bg-white rounded-2xl shadow-xl border border-[#EADCC9] overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#2C2621]/60 backdrop-blur-xs">
+          <div className="w-full max-w-lg bg-white rounded-2xl shadow-xl border border-[#EAE3D9] overflow-hidden">
             {/* Header */}
-            <div className="bg-[#3E3C3A] text-white p-5 flex items-center justify-between border-b border-[#EADCC9]/20">
+            <div className="bg-[#7C6A53] text-white p-5 flex items-center justify-between border-b border-[#EAE3D9]/20">
               <h4 className="font-serif-display text-lg font-bold">
                 {serviceModal.mode === 'add' ? 'Insert Bespoke Ritual' : 'Modify Salon Ritual'}
               </h4>
@@ -1068,7 +1610,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
             {/* Form */}
             <form onSubmit={handleSaveService} className="p-6 space-y-4">
               <div>
-                <label className="block text-[10px] font-bold text-[#8B7E74] uppercase tracking-wider mb-1">
+                <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1">
                   Service Name
                 </label>
                 <input
@@ -1080,13 +1622,13 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                     service: { ...prev.service!, name: e.target.value }
                   }))}
                   placeholder="e.g. Signature Silk Blowout"
-                  className="w-full bg-[#FAF8F5] border border-[#EADCC9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#C5A880] text-[#1F1E1D]"
+                  className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621]"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[10px] font-bold text-[#8B7E74] uppercase tracking-wider mb-1">
+                  <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1">
                     Duration (Minutes)
                   </label>
                   <input
@@ -1098,12 +1640,12 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                       ...prev,
                       service: { ...prev.service!, duration_minutes: Number(e.target.value) }
                     }))}
-                    className="w-full bg-[#FAF8F5] border border-[#EADCC9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#C5A880] text-[#1F1E1D]"
+                    className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621]"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-[#8B7E74] uppercase tracking-wider mb-1">
+                  <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1">
                     Pricing Rate ($)
                   </label>
                   <input
@@ -1115,13 +1657,13 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                       ...prev,
                       service: { ...prev.service!, price: Number(e.target.value) }
                     }))}
-                    className="w-full bg-[#FAF8F5] border border-[#EADCC9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#C5A880] text-[#1F1E1D]"
+                    className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621]"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold text-[#8B7E74] uppercase tracking-wider mb-1">
+                <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1">
                   Ritual Description
                 </label>
                 <textarea
@@ -1132,7 +1674,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                     service: { ...prev.service!, description: e.target.value }
                   }))}
                   placeholder="Describe the styling consultation, nourishment washing, specific premium oils, blowdrying options..."
-                  className="w-full bg-[#FAF8F5] border border-[#EADCC9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#C5A880] text-[#1F1E1D]"
+                  className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621]"
                 />
               </div>
 
@@ -1145,26 +1687,26 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                     ...prev,
                     service: { ...prev.service!, is_active: e.target.checked }
                   }))}
-                  className="rounded border-[#EADCC9] text-[#C5A880] focus:ring-[#C5A880]/30 cursor-pointer"
+                  className="rounded border-[#EAE3D9] text-[#A68A64] focus:ring-[#A68A64]/30 cursor-pointer"
                 />
-                <label htmlFor="srv-active" className="text-xs font-semibold text-[#3E3C3A] uppercase tracking-wider cursor-pointer">
+                <label htmlFor="srv-active" className="text-xs font-semibold text-[#2C2621] uppercase tracking-wider cursor-pointer">
                   Service is available for public online bookings
                 </label>
               </div>
 
-              <div className="border-t border-[#EADCC9]/30 pt-4 flex justify-end gap-2.5">
+              <div className="border-t border-[#EAE3D9]/30 pt-4 flex justify-end gap-2.5">
                 <button
                   type="button"
                   onClick={() => setServiceModal({ isOpen: false, mode: 'add', service: null })}
-                  className="px-4 py-2 rounded-full border border-[#EADCC9] text-[#3E3C3A] hover:bg-[#F4EFE6] transition-all font-semibold text-xs uppercase tracking-wider cursor-pointer"
+                  className="px-4 py-2 rounded-full border border-[#EAE3D9] text-[#2C2621] hover:bg-[#EAE3D9] transition-all font-semibold text-xs uppercase tracking-wider cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="inline-flex items-center gap-1.5 px-5 py-2 rounded-full bg-[#3E3C3A] hover:bg-[#1F1E1D] text-white transition-all font-bold text-xs uppercase tracking-wider cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-5 py-2 rounded-full bg-[#7C6A53] hover:bg-[#5A4D3F] text-white transition-all font-bold text-xs uppercase tracking-wider cursor-pointer"
                 >
-                  <Check className="w-4 h-4 text-[#C5A880]" />
+                  <Check className="w-4 h-4 text-[#A68A64]" />
                   <span>Save Record</span>
                 </button>
               </div>
@@ -1175,10 +1717,10 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
 
       {/* MODAL - BLOCK DATE */}
       {blockDateModal.isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#1F1E1D]/60 backdrop-blur-xs">
-          <div className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-[#EADCC9] overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#2C2621]/60 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-[#EAE3D9] overflow-hidden">
             {/* Header */}
-            <div className="bg-[#3E3C3A] text-white p-5 flex items-center justify-between border-b border-[#EADCC9]/20">
+            <div className="bg-[#7C6A53] text-white p-5 flex items-center justify-between border-b border-[#EAE3D9]/20">
               <h4 className="font-serif-display text-lg font-bold">Restrict Booking Date</h4>
               <button
                 onClick={() => setBlockDateModal({ isOpen: false, dateStr: '', reason: '' })}
@@ -1191,7 +1733,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
             {/* Form */}
             <form onSubmit={handleAddBlockedDateSubmit} className="p-6 space-y-4">
               <div>
-                <label className="block text-[10px] font-bold text-[#8B7E74] uppercase tracking-wider mb-1">
+                <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1">
                   Restrict Date
                 </label>
                 <input
@@ -1199,12 +1741,12 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                   required
                   value={blockDateModal.dateStr}
                   onChange={(e) => setBlockDateModal(prev => ({ ...prev, dateStr: e.target.value }))}
-                  className="w-full bg-[#FAF8F5] border border-[#EADCC9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#C5A880] text-[#1F1E1D]"
+                  className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621]"
                 />
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold text-[#8B7E74] uppercase tracking-wider mb-1">
+                <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1">
                   Reason for restriction
                 </label>
                 <input
@@ -1213,24 +1755,179 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                   value={blockDateModal.reason}
                   onChange={(e) => setBlockDateModal(prev => ({ ...prev, reason: e.target.value }))}
                   placeholder="e.g. Labor Day Holiday / Salon Renovation"
-                  className="w-full bg-[#FAF8F5] border border-[#EADCC9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#C5A880] text-[#1F1E1D]"
+                  className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621]"
                 />
               </div>
 
-              <div className="border-t border-[#EADCC9]/30 pt-4 flex justify-end gap-2">
+              <div className="border-t border-[#EAE3D9]/30 pt-4 flex justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setBlockDateModal({ isOpen: false, dateStr: '', reason: '' })}
-                  className="px-4 py-2 rounded-full border border-[#EADCC9] text-[#3E3C3A] hover:bg-[#F4EFE6] transition-all font-semibold text-xs uppercase tracking-wider cursor-pointer"
+                  className="px-4 py-2 rounded-full border border-[#EAE3D9] text-[#2C2621] hover:bg-[#EAE3D9] transition-all font-semibold text-xs uppercase tracking-wider cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="inline-flex items-center gap-1 px-5 py-2 rounded-full bg-[#3E3C3A] hover:bg-[#1F1E1D] text-white transition-all font-bold text-xs uppercase tracking-wider cursor-pointer"
+                  className="inline-flex items-center gap-1 px-5 py-2 rounded-full bg-[#7C6A53] hover:bg-[#5A4D3F] text-white transition-all font-bold text-xs uppercase tracking-wider cursor-pointer"
                 >
-                  <Check className="w-4 h-4 text-[#C5A880]" />
+                  <Check className="w-4 h-4 text-[#A68A64]" />
                   <span>Restrict Date</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL / DRAWER - STAFF CREATE & UPDATE */}
+      {staffModal.isOpen && staffModal.staffMember && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#2C2621]/60 backdrop-blur-xs">
+          <div className="w-full max-w-lg bg-white rounded-2xl shadow-xl border border-[#EAE3D9] overflow-hidden">
+            <div className="bg-[#7C6A53] text-white p-5 flex items-center justify-between border-b border-[#EAE3D9]/20">
+              <h4 className="font-serif-display text-lg font-bold">
+                {staffModal.mode === 'add' ? 'Add Salon Artist' : 'Edit Artist Profile'}
+              </h4>
+              <button
+                onClick={() => setStaffModal({ isOpen: false, mode: 'add', staffMember: null })}
+                className="p-1 rounded-lg text-neutral-300 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveStaff} className="p-6 space-y-4">
+              <div>
+                <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1">
+                  Artist Full Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={staffModal.staffMember.name || ''}
+                  onChange={(e) => setStaffModal(prev => ({
+                    ...prev,
+                    staffMember: { ...prev.staffMember!, name: e.target.value }
+                  }))}
+                  placeholder="e.g. Vikram Singh"
+                  className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621]"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1">
+                    Role / Title
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={staffModal.staffMember.role || ''}
+                    onChange={(e) => setStaffModal(prev => ({
+                      ...prev,
+                      staffMember: { ...prev.staffMember!, role: e.target.value }
+                    }))}
+                    placeholder="e.g. Senior Stylist & Colorist"
+                    className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1">
+                    Experience Badge
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={staffModal.staffMember.experience || ''}
+                    onChange={(e) => setStaffModal(prev => ({
+                      ...prev,
+                      staffMember: { ...prev.staffMember!, experience: e.target.value }
+                    }))}
+                    placeholder="e.g. 10+ Years Experience"
+                    className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1">
+                  Specialty
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={staffModal.staffMember.specialty || ''}
+                  onChange={(e) => setStaffModal(prev => ({
+                    ...prev,
+                    staffMember: { ...prev.staffMember!, specialty: e.target.value }
+                  }))}
+                  placeholder="e.g. Precision Cuts & Balayage"
+                  className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1">
+                  Portrait Image URL (Unsplash / Photo Link)
+                </label>
+                <input
+                  type="url"
+                  required
+                  value={staffModal.staffMember.image_url || ''}
+                  onChange={(e) => setStaffModal(prev => ({
+                    ...prev,
+                    staffMember: { ...prev.staffMember!, image_url: e.target.value }
+                  }))}
+                  placeholder="https://images.unsplash.com/photo-..."
+                  className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-[#7C6A53] uppercase tracking-wider mb-1">
+                  Biography / Expertise Intro
+                </label>
+                <textarea
+                  rows={2}
+                  value={staffModal.staffMember.bio || ''}
+                  onChange={(e) => setStaffModal(prev => ({
+                    ...prev,
+                    staffMember: { ...prev.staffMember!, bio: e.target.value }
+                  }))}
+                  placeholder="Renowned across Jaipur for bespoke precision haircuts..."
+                  className="w-full bg-[#F8F5F1] border border-[#EAE3D9] rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#A68A64] text-[#2C2621]"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-between">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={staffModal.staffMember.is_active ?? true}
+                    onChange={(e) => setStaffModal(prev => ({
+                      ...prev,
+                      staffMember: { ...prev.staffMember!, is_active: e.target.checked }
+                    }))}
+                    className="rounded border-[#EAE3D9] text-[#7C6A53] focus:ring-[#A68A64]"
+                  />
+                  <span className="text-xs font-semibold text-[#2C2621]">Display on Public Homepage</span>
+                </label>
+              </div>
+
+              <div className="border-t border-[#EAE3D9]/30 pt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setStaffModal({ isOpen: false, mode: 'add', staffMember: null })}
+                  className="px-4 py-2 rounded-lg border border-[#EAE3D9] text-[#7C6A53] font-bold text-xs uppercase tracking-wider hover:bg-neutral-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-lg bg-[#7C6A53] hover:bg-[#5A4D3F] text-white font-bold text-xs uppercase tracking-wider shadow-sm cursor-pointer"
+                >
+                  Save Artist Profile
                 </button>
               </div>
             </form>

@@ -2,6 +2,7 @@ export interface Service {
   id: string;
   name: string;
   description: string | null;
+  category?: string;
   duration_minutes: number;
   price: number;
   is_active: boolean;
@@ -59,4 +60,16 @@ export interface TimeSlot {
   start: Date;
   end: Date;
   label: string;
+}
+
+export interface Staff {
+  id: string;
+  name: string;
+  role: string;
+  experience: string;
+  specialty: string;
+  bio: string;
+  image_url: string;
+  is_active: boolean;
+  created_at?: string;
 }

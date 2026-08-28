@@ -46,6 +46,7 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createdAppointment, setCreatedAppointment] = useState<Appointment | null>(null);
+  const [bookingError, setBookingError] = useState<string>('');
 
   // Calendar UI navigation
   const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
@@ -85,23 +86,55 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
     loadData();
   }, [selectedServiceId]);
 
-  // Load available slots when service or date selection changes
+  // Reset states when service or date changes according to rules:
+  // - reset availableSlots when selectedService changes
+  // - reset selectedTime (selectedSlot) when service changes
+  // - reset selectedTime (selectedSlot) when date changes
   useEffect(() => {
-    if (selectedService && selectedDateStr) {
-      async function fetchSlots() {
-        setLoadingSlots(true);
-        setSelectedSlot(null);
-        try {
-          const slots = await getAvailableSlots(selectedService!, selectedDateStr);
+    setSelectedSlot(null);
+    setAvailableSlots([]);
+  }, [selectedService]);
+
+  useEffect(() => {
+    setSelectedSlot(null);
+  }, [selectedDateStr]);
+
+  // Load available slots when service or date selection changes
+  // - selectedService must exist before calculating slots
+  // - selectedDate must exist before calculating slots
+  // - recalculate available slots whenever selectedService changes
+  // - recalculate available slots whenever selectedDate changes
+  // - do not calculate slots if required inputs are missing
+  useEffect(() => {
+    if (!selectedService || !selectedDateStr) {
+      setAvailableSlots([]);
+      return;
+    }
+
+    let isSubscribed = true;
+    async function fetchSlots() {
+      setLoadingSlots(true);
+      try {
+        const slots = await getAvailableSlots(selectedService!, selectedDateStr);
+        if (isSubscribed) {
           setAvailableSlots(slots);
-        } catch (err) {
-          console.error('Error loading slots', err);
-        } finally {
+        }
+      } catch (err) {
+        console.error('Error generating available slots:', err);
+        if (isSubscribed) {
+          setAvailableSlots([]);
+        }
+      } finally {
+        if (isSubscribed) {
           setLoadingSlots(false);
         }
       }
-      fetchSlots();
     }
+    fetchSlots();
+
+    return () => {
+      isSubscribed = false;
+    };
   }, [selectedService, selectedDateStr]);
 
   // Helpers for calendar rendering
@@ -204,10 +237,10 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
                 disabled={!selectable}
                 className={`py-2.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                   isSelected 
-                    ? 'bg-[#3E3C3A] text-white shadow-md scale-105 font-bold' 
+                    ? 'bg-[#7C6A53] text-white shadow-md scale-105 font-bold' 
                     : selectable 
-                      ? 'bg-white text-[#1F1E1D] border border-[#FAF8F5] hover:border-[#C5A880] hover:bg-[#FAF8F5]' 
-                      : 'bg-[#F9F7F4] text-neutral-300 cursor-not-allowed line-through'
+                      ? 'bg-white text-[#2C2621] border border-[#F8F5F1] hover:border-[#A68A64] hover:bg-[#F8F5F1]' 
+                      : 'bg-[#F8F5F1] text-neutral-300 cursor-not-allowed line-through'
                 }`}
               >
                 {day}
@@ -216,17 +249,17 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
           })}
         </div>
         
-        <div className="mt-4 flex flex-wrap gap-4 text-xs justify-center border-t border-[#EADCC9]/50 pt-3 text-[#8B7E74]">
+        <div className="mt-4 flex flex-wrap gap-4 text-xs justify-center border-t border-[#EAE3D9]/50 pt-3 text-[#7C6A53]">
           <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-full bg-white border border-[#EADCC9]"></span>
+            <span className="w-3 h-3 rounded-full bg-white border border-[#EAE3D9]"></span>
             <span>Available</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-full bg-[#3E3C3A]"></span>
+            <span className="w-3 h-3 rounded-full bg-[#7C6A53]"></span>
             <span>Selected</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-full bg-[#F9F7F4] border border-[#EADCC9]/30 line-through text-neutral-300"></span>
+            <span className="w-3 h-3 rounded-full bg-[#FAF8F5] border border-[#EAE3D9]/30 line-through text-neutral-300"></span>
             <span>Closed/Blocked</span>
           </div>
         </div>
@@ -264,6 +297,7 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
     }
 
     setIsSubmitting(true);
+    setBookingError('');
     try {
       // Formats the start_time and end_time as "HH:MM:SS"
       const formatTime = (date: Date) => {
@@ -289,8 +323,9 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
       if (onSuccess) {
         onSuccess(appointment);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error reserving appointment:', err);
+      setBookingError(err?.message || 'The system was unable to reserve this appointment time. Please try another slot or refresh the page.');
     } finally {
       setIsSubmitting(false);
     }
@@ -332,14 +367,14 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
                 <div key={s.num} className="flex flex-col items-center z-10 relative">
                   <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold transition-all duration-300 border-2 ${
                     isCompleted 
-                      ? 'bg-[#C5A880] border-[#C5A880] text-white' 
+                      ? 'bg-[#A68A64] border-[#A68A64] text-white' 
                       : isActive 
-                        ? 'bg-[#3E3C3A] border-[#3E3C3A] text-white scale-110 shadow-md shadow-[#C5A880]/10' 
-                        : 'bg-white border-[#EADCC9] text-[#8B7E74]'
+                        ? 'bg-[#7C6A53] border-[#7C6A53] text-white scale-110 shadow-md shadow-[#A68A64]/10' 
+                        : 'bg-white border-[#EAE3D9] text-[#7C6A53]'
                   }`}>
                     {isCompleted ? '✓' : s.num}
                   </div>
-                  <span className={`text-xs mt-2 font-medium hidden sm:inline ${isActive ? 'text-[#1F1E1D] font-bold' : 'text-[#8B7E74]'}`}>
+                  <span className={`text-xs mt-2 font-medium hidden sm:inline ${isActive ? 'text-[#2C2621] font-bold' : 'text-[#7C6A53]'}`}>
                     {s.label}
                   </span>
                 </div>
@@ -353,17 +388,17 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
       {step === 1 && (
         <div>
           <div className="text-center mb-8">
-            <span className="text-xs uppercase tracking-widest text-[#C5A880] font-semibold">Exquisite Offerings</span>
-            <h3 className="font-serif-display text-3xl sm:text-4xl font-bold mt-1 text-[#3E3C3A]">Select a Salon Service</h3>
-            <p className="text-[#8B7E74] max-w-md mx-auto mt-2 text-sm sm:text-base">
+            <span className="text-xs uppercase tracking-widest text-[#A68A64] font-semibold">Exquisite Offerings</span>
+            <h3 className="font-serif-display text-3xl sm:text-4xl font-bold mt-1 text-[#40362D]">Select a Salon Service</h3>
+            <p className="text-[#7C6A53] max-w-md mx-auto mt-2 text-sm sm:text-base">
               Each experience is custom-tailored to enhance your unique structural elegance and confidence.
             </p>
           </div>
 
           {loadingServices ? (
             <div className="flex flex-col items-center justify-center py-20 gap-3">
-              <div className="w-10 h-10 border-4 border-[#C5A880]/20 border-t-[#C5A880] rounded-full animate-spin" />
-              <p className="text-sm text-[#8B7E74]">Curating our premium rituals...</p>
+              <div className="w-10 h-10 border-4 border-[#A68A64]/20 border-t-[#A68A64] rounded-full animate-spin" />
+              <p className="text-sm text-[#7C6A53]">Curating our premium rituals...</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -375,27 +410,27 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
                     onClick={() => setSelectedService(service)}
                     className={`border p-6 rounded-xl transition-all duration-300 cursor-pointer flex flex-col justify-between ${
                       isSelected 
-                        ? 'border-[#C5A880] bg-[#FAF8F5] ring-1 ring-[#C5A880]/30 shadow-md' 
-                        : 'border-[#EADCC9]/50 bg-white hover:border-[#C5A880]/60 hover:shadow-sm'
+                        ? 'border-[#A68A64] bg-[#F8F5F1] ring-1 ring-[#A68A64]/30 shadow-md' 
+                        : 'border-[#EAE3D9]/50 bg-white hover:border-[#A68A64]/60 hover:shadow-sm'
                     }`}
                   >
                     <div>
                       <div className="flex justify-between items-start gap-4 mb-2">
-                        <h4 className="font-serif-display text-xl font-bold text-[#3E3C3A] group-hover:text-[#C5A880] transition-colors">
+                        <h4 className="font-serif-display text-xl font-bold text-[#40362D] group-hover:text-[#A68A64] transition-colors">
                           {service.name}
                         </h4>
-                        <span className="text-lg font-bold text-[#C5A880] whitespace-nowrap">
-                          ${service.price}
+                        <span className="text-lg font-bold text-[#A68A64] whitespace-nowrap">
+                          ₹{service.price}
                         </span>
                       </div>
-                      <p className="text-xs sm:text-sm text-[#8B7E74] leading-relaxed mb-6">
+                      <p className="text-xs sm:text-sm text-[#7C6A53] leading-relaxed mb-6">
                         {service.description || 'Custom professional service tailored specifically to your stylist recommendation.'}
                       </p>
                     </div>
 
-                    <div className="flex items-center justify-between border-t border-[#EADCC9]/30 pt-4 mt-auto">
-                      <span className="text-xs font-semibold text-[#8B7E74] flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5 text-[#C5A880]" />
+                    <div className="flex items-center justify-between border-t border-[#EAE3D9]/30 pt-4 mt-auto">
+                      <span className="text-xs font-semibold text-[#7C6A53] flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-[#A68A64]" />
                         {service.duration_minutes} Minutes
                       </span>
                       <button
@@ -406,8 +441,8 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
                         }}
                         className={`text-xs font-semibold py-1.5 px-4 rounded-full transition-all duration-300 flex items-center gap-1 ${
                           isSelected
-                            ? 'bg-[#3E3C3A] text-white hover:bg-[#1F1E1D]'
-                            : 'bg-[#F4EFE6] text-[#3E3C3A] hover:bg-[#C5A880] hover:text-white'
+                            ? 'bg-[#7C6A53] text-white hover:bg-[#5A4D3F]'
+                            : 'bg-[#EAE3D9] text-[#7C6A53] hover:bg-[#A68A64] hover:text-white'
                         }`}
                       >
                         <span>Select Ritual</span>
@@ -424,7 +459,7 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
             <div className="flex justify-end mt-8">
               <button
                 onClick={() => setStep(2)}
-                className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-[#3E3C3A] text-white hover:bg-[#1F1E1D] transition-all font-semibold shadow-sm cursor-pointer hover:shadow-md hover:translate-x-0.5"
+                className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-[#7C6A53] text-white hover:bg-[#5A4D3F] transition-all font-semibold shadow-sm cursor-pointer hover:shadow-md hover:translate-x-0.5"
               >
                 <span>Continue to Schedule</span>
                 <ArrowRight className="w-4 h-4" />
@@ -438,18 +473,18 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
       {step === 2 && (
         <div>
           <div className="text-center mb-8">
-            <span className="text-xs uppercase tracking-widest text-[#C5A880] font-semibold">Reserve Your Spot</span>
-            <h3 className="font-serif-display text-3xl sm:text-4xl font-bold mt-1 text-[#3E3C3A]">Choose Date & Time</h3>
-            <p className="text-[#8B7E74] max-w-md mx-auto mt-2 text-sm">
-              Selected service: <span className="text-[#3E3C3A] font-semibold">{selectedService?.name}</span> ({selectedService?.duration_minutes} min)
+            <span className="text-xs uppercase tracking-widest text-[#A68A64] font-semibold">Reserve Your Spot</span>
+            <h3 className="font-serif-display text-3xl sm:text-4xl font-bold mt-1 text-[#40362D]">Choose Date & Time</h3>
+            <p className="text-[#7C6A53] max-w-md mx-auto mt-2 text-sm">
+              Selected service: <span className="text-[#40362D] font-semibold">{selectedService?.name}</span> ({selectedService?.duration_minutes} min)
             </p>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             {/* Calendar Column */}
             <div className="lg:col-span-7">
-              <h4 className="text-xs uppercase tracking-widest text-[#8B7E74] font-semibold mb-3 flex items-center gap-1.5">
-                <CalendarIcon className="w-4 h-4 text-[#C5A880]" />
+              <h4 className="text-xs uppercase tracking-widest text-[#7C6A53] font-semibold mb-3 flex items-center gap-1.5">
+                <CalendarIcon className="w-4 h-4 text-[#A68A64]" />
                 <span>1. Select an Open Date</span>
               </h4>
               {renderCalendar()}
@@ -457,27 +492,27 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
 
             {/* Time Slots Column */}
             <div className="lg:col-span-5">
-              <h4 className="text-xs uppercase tracking-widest text-[#8B7E74] font-semibold mb-3 flex items-center gap-1.5">
-                <Clock className="w-4 h-4 text-[#C5A880]" />
+              <h4 className="text-xs uppercase tracking-widest text-[#7C6A53] font-semibold mb-3 flex items-center gap-1.5">
+                <Clock className="w-4 h-4 text-[#A68A64]" />
                 <span>2. Available Time Slots</span>
               </h4>
 
               {!selectedDateStr ? (
-                <div className="border border-dashed border-[#EADCC9] rounded-xl p-8 text-center bg-white text-[#8B7E74]">
-                  <CalendarDays className="w-10 h-10 text-[#C5A880]/30 mx-auto mb-3" />
-                  <p className="text-sm font-medium text-[#3E3C3A]">Awaiting Date Selection</p>
-                  <p className="text-xs text-[#8B7E74] mt-1">Please select an open date on the calendar first to calculate live available time slots.</p>
+                <div className="border border-dashed border-[#EAE3D9] rounded-xl p-8 text-center bg-white text-[#7C6A53]">
+                  <CalendarDays className="w-10 h-10 text-[#A68A64]/30 mx-auto mb-3" />
+                  <p className="text-sm font-medium text-[#40362D]">Awaiting Date Selection</p>
+                  <p className="text-xs text-[#7C6A53] mt-1">Please select an open date on the calendar first to calculate live available time slots.</p>
                 </div>
               ) : loadingSlots ? (
-                <div className="flex flex-col items-center justify-center py-12 gap-2 bg-white border border-[#EADCC9]/50 rounded-xl">
-                  <div className="w-8 h-8 border-3 border-[#C5A880]/20 border-t-[#C5A880] rounded-full animate-spin" />
-                  <p className="text-xs text-[#8B7E74]">Reviewing live stylist schedules...</p>
+                <div className="flex flex-col items-center justify-center py-12 gap-2 bg-white border border-[#EAE3D9]/50 rounded-xl">
+                  <div className="w-8 h-8 border-3 border-[#A68A64]/20 border-t-[#A68A64] rounded-full animate-spin" />
+                  <p className="text-xs text-[#7C6A53]">Reviewing live stylist schedules...</p>
                 </div>
               ) : availableSlots.length === 0 ? (
-                <div className="border border-[#EADCC9]/50 rounded-xl p-8 text-center bg-white text-[#8B7E74]">
+                <div className="border border-[#EAE3D9]/50 rounded-xl p-8 text-center bg-white text-[#7C6A53]">
                   <HelpCircle className="w-10 h-10 text-amber-500/30 mx-auto mb-2" />
-                  <p className="text-sm font-medium text-[#3E3C3A]">No Slots Available</p>
-                  <p className="text-xs text-[#8B7E74] mt-1">There are no remaining booking windows on this day. Please try a different date or weekday.</p>
+                  <p className="text-sm font-medium text-[#40362D]">No Slots Available</p>
+                  <p className="text-xs text-[#7C6A53] mt-1">There are no remaining booking windows on this day. Please try a different date or weekday.</p>
                 </div>
               ) : (
                 <div className="space-y-4 max-h-[390px] overflow-y-auto pr-1">
@@ -485,8 +520,8 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
                   {Object.entries(getGroupedSlots()).map(([timeOfDay, slots]) => {
                     if (slots.length === 0) return null;
                     return (
-                      <div key={timeOfDay} className="bg-white border border-[#EADCC9]/40 rounded-lg p-3">
-                        <span className="text-[10px] uppercase tracking-widest font-bold text-[#C5A880] mb-2 block">
+                      <div key={timeOfDay} className="bg-white border border-[#EAE3D9]/40 rounded-lg p-3">
+                        <span className="text-[10px] uppercase tracking-widest font-bold text-[#A68A64] mb-2 block">
                           {timeOfDay} Slots
                         </span>
                         <div className="grid grid-cols-3 gap-2">
@@ -499,8 +534,8 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
                                 onClick={() => setSelectedSlot(slot)}
                                 className={`py-2 px-1 text-center rounded-md font-medium text-xs transition-all cursor-pointer border ${
                                   isSelected
-                                    ? 'bg-[#C5A880] border-[#C5A880] text-white shadow-sm'
-                                    : 'bg-[#FAF8F5] border-[#FAF8F5] text-[#3E3C3A] hover:border-[#C5A880] hover:bg-[#F3ECE0]'
+                                    ? 'bg-[#A68A64] border-[#A68A64] text-white shadow-sm'
+                                    : 'bg-[#F8F5F1] border-[#F8F5F1] text-[#40362D] hover:border-[#A68A64] hover:bg-[#EAE3D9]'
                                 }`}
                               >
                                 {slot.label}
@@ -517,10 +552,10 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
           </div>
 
           {/* Navigation Controls */}
-          <div className="flex justify-between mt-10 border-t border-[#EADCC9]/40 pt-6">
+          <div className="flex justify-between mt-10 border-t border-[#EAE3D9]/40 pt-6">
             <button
               onClick={() => setStep(1)}
-              className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-full border border-[#EADCC9] text-[#3E3C3A] hover:bg-[#F4EFE6] transition-all font-medium text-sm cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-full border border-[#EAE3D9] text-[#40362D] hover:bg-[#EAE3D9] transition-all font-medium text-sm cursor-pointer"
             >
               <ChevronLeft className="w-4 h-4" />
               <span>Back</span>
@@ -530,7 +565,7 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
               onClick={() => setStep(3)}
               className={`inline-flex items-center gap-2 px-6 py-2.5 rounded-full font-semibold text-sm transition-all shadow-sm cursor-pointer ${
                 selectedSlot
-                  ? 'bg-[#3E3C3A] text-white hover:bg-[#1F1E1D] hover:shadow-md'
+                  ? 'bg-[#7C6A53] text-white hover:bg-[#5A4D3F] hover:shadow-md'
                   : 'bg-neutral-200 text-neutral-400 cursor-not-allowed'
               }`}
             >
@@ -545,9 +580,9 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
       {step === 3 && (
         <div className="max-w-2xl mx-auto">
           <div className="text-center mb-8">
-            <span className="text-xs uppercase tracking-widest text-[#C5A880] font-semibold">Your Information</span>
-            <h3 className="font-serif-display text-3xl sm:text-4xl font-bold mt-1 text-[#3E3C3A]">Complete Reservation</h3>
-            <p className="text-[#8B7E74] max-w-md mx-auto mt-2 text-sm">
+            <span className="text-xs uppercase tracking-widest text-[#A68A64] font-semibold">Your Information</span>
+            <h3 className="font-serif-display text-3xl sm:text-4xl font-bold mt-1 text-[#40362D]">Complete Reservation</h3>
+            <p className="text-[#7C6A53] max-w-md mx-auto mt-2 text-sm">
               Provide your details below to finalize your booking at AURA.
             </p>
           </div>
@@ -555,12 +590,17 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
           <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
             {/* Form Details Column */}
             <form onSubmit={handleBookingSubmit} className="md:col-span-7 space-y-4">
+              {bookingError && (
+                <div className="p-3.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-800 leading-relaxed font-medium">
+                  {bookingError}
+                </div>
+              )}
               <div>
-                <label className="block text-xs font-bold text-[#8B7E74] uppercase tracking-wider mb-1.5" htmlFor="name">
+                <label className="block text-xs font-bold text-[#7C6A53] uppercase tracking-wider mb-1.5" htmlFor="name">
                   Full Name
                 </label>
                 <div className="relative">
-                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#C5A880]" />
+                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#A68A64]" />
                   <input
                     id="name"
                     type="text"
@@ -568,17 +608,17 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
                     placeholder="Enter your name"
-                    className="w-full bg-white border border-[#EADCC9] rounded-lg pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-[#C5A880] focus:ring-1 focus:ring-[#C5A880]/30 transition-all text-[#1F1E1D]"
+                    className="w-full bg-white border border-[#EAE3D9] rounded-lg pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-[#A68A64] focus:ring-1 focus:ring-[#A68A64]/30 transition-all text-[#2C2621]"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-[#8B7E74] uppercase tracking-wider mb-1.5" htmlFor="email">
+                <label className="block text-xs font-bold text-[#7C6A53] uppercase tracking-wider mb-1.5" htmlFor="email">
                   Email Address
                 </label>
                 <div className="relative">
-                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#C5A880]" />
+                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#A68A64]" />
                   <input
                     id="email"
                     type="email"
@@ -586,17 +626,17 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="you@example.com"
-                    className="w-full bg-white border border-[#EADCC9] rounded-lg pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-[#C5A880] focus:ring-1 focus:ring-[#C5A880]/30 transition-all text-[#1F1E1D]"
+                    className="w-full bg-white border border-[#EAE3D9] rounded-lg pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-[#A68A64] focus:ring-1 focus:ring-[#A68A64]/30 transition-all text-[#2C2621]"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-[#8B7E74] uppercase tracking-wider mb-1.5" htmlFor="phone">
+                <label className="block text-xs font-bold text-[#7C6A53] uppercase tracking-wider mb-1.5" htmlFor="phone">
                   Phone Number
                 </label>
                 <div className="relative">
-                  <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#C5A880]" />
+                  <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#A68A64]" />
                   <input
                     id="phone"
                     type="tel"
@@ -604,34 +644,34 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                     placeholder="(555) 000-0000"
-                    className="w-full bg-white border border-[#EADCC9] rounded-lg pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-[#C5A880] focus:ring-1 focus:ring-[#C5A880]/30 transition-all text-[#1F1E1D]"
+                    className="w-full bg-white border border-[#EAE3D9] rounded-lg pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-[#A68A64] focus:ring-1 focus:ring-[#A68A64]/30 transition-all text-[#2C2621]"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-[#8B7E74] uppercase tracking-wider mb-1.5" htmlFor="notes">
+                <label className="block text-xs font-bold text-[#7C6A53] uppercase tracking-wider mb-1.5" htmlFor="notes">
                   Styling Notes (Optional)
                 </label>
                 <div className="relative">
-                  <FileText className="absolute left-3.5 top-3.5 w-4 h-4 text-[#C5A880]" />
+                  <FileText className="absolute left-3.5 top-3.5 w-4 h-4 text-[#A68A64]" />
                   <textarea
                     id="notes"
                     rows={3}
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     placeholder="Tell us about your hair type, desired look, or styling preferences..."
-                    className="w-full bg-white border border-[#EADCC9] rounded-lg pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-[#C5A880] focus:ring-1 focus:ring-[#C5A880]/30 transition-all text-[#1F1E1D]"
+                    className="w-full bg-white border border-[#EAE3D9] rounded-lg pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-[#A68A64] focus:ring-1 focus:ring-[#A68A64]/30 transition-all text-[#2C2621]"
                   />
                 </div>
               </div>
 
               {/* Navigation Actions inside form */}
-              <div className="flex justify-between mt-8 border-t border-[#EADCC9]/40 pt-5">
+              <div className="flex justify-between mt-8 border-t border-[#EAE3D9]/40 pt-5">
                 <button
                   type="button"
                   onClick={() => setStep(2)}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full border border-[#EADCC9] text-[#3E3C3A] hover:bg-[#F4EFE6] transition-all font-medium text-xs cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full border border-[#EAE3D9] text-[#7C6A53] hover:bg-[#EAE3D9] transition-all font-medium text-xs cursor-pointer"
                 >
                   <ChevronLeft className="w-3.5 h-3.5" />
                   <span>Back</span>
@@ -639,7 +679,7 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-[#3E3C3A] hover:bg-[#1F1E1D] text-white font-semibold text-xs transition-all shadow-sm cursor-pointer disabled:bg-neutral-300 disabled:cursor-not-allowed"
+                  className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-[#7C6A53] hover:bg-[#5A4D3F] text-white font-semibold text-xs transition-all shadow-sm cursor-pointer disabled:bg-neutral-300 disabled:cursor-not-allowed"
                 >
                   {isSubmitting ? (
                     <>
@@ -649,7 +689,7 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
                   ) : (
                     <>
                       <span>Book Appointment</span>
-                      <CheckCircle2 className="w-4 h-4 text-[#C5A880]" />
+                      <CheckCircle2 className="w-4 h-4 text-[#A68A64]" />
                     </>
                   )}
                 </button>
@@ -657,31 +697,31 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
             </form>
 
             {/* Live Summary Column */}
-            <div className="md:col-span-5 bg-[#FAF8F5] border border-[#EADCC9] rounded-xl p-5 shadow-sm space-y-4">
-              <span className="text-[10px] uppercase tracking-widest font-bold text-[#C5A880] block pb-2 border-b border-[#EADCC9]/50">
+            <div className="md:col-span-5 bg-[#F8F5F1] border border-[#EAE3D9] rounded-xl p-5 shadow-sm space-y-4">
+              <span className="text-[10px] uppercase tracking-widest font-bold text-[#A68A64] block pb-2 border-b border-[#EAE3D9]/50">
                 Reservation Summary
               </span>
               
               <div>
-                <p className="text-xs text-[#8B7E74] font-medium">Selected Service</p>
-                <p className="text-sm font-semibold text-[#3E3C3A] mt-0.5">{selectedService?.name}</p>
-                <p className="text-xs text-[#C5A880] font-medium">{selectedService?.duration_minutes} min • ${selectedService?.price}</p>
+                <p className="text-xs text-[#7C6A53] font-medium">Selected Service</p>
+                <p className="text-sm font-semibold text-[#40362D] mt-0.5">{selectedService?.name}</p>
+                <p className="text-xs text-[#A68A64] font-medium">{selectedService?.duration_minutes} min • ₹{selectedService?.price}</p>
               </div>
 
               <div>
-                <p className="text-xs text-[#8B7E74] font-medium">Appointment Date</p>
-                <p className="text-sm font-semibold text-[#3E3C3A] mt-0.5">{formatSelectedDate()}</p>
+                <p className="text-xs text-[#7C6A53] font-medium">Appointment Date</p>
+                <p className="text-sm font-semibold text-[#40362D] mt-0.5">{formatSelectedDate()}</p>
               </div>
 
               <div>
-                <p className="text-xs text-[#8B7E74] font-medium">Selected Time Window</p>
-                <p className="text-sm font-semibold text-[#3E3C3A] mt-0.5">{selectedSlot?.label}</p>
-                <p className="text-[10px] text-[#8B7E74] mt-0.5">Please arrive 5 minutes early for consultation.</p>
+                <p className="text-xs text-[#7C6A53] font-medium">Selected Time Window</p>
+                <p className="text-sm font-semibold text-[#40362D] mt-0.5">{selectedSlot?.label}</p>
+                <p className="text-[10px] text-[#7C6A53] mt-0.5">Please arrive 5 minutes early for consultation.</p>
               </div>
 
-              <div className="border-t border-[#EADCC9]/50 pt-3 flex justify-between items-center text-sm">
-                <span className="font-bold text-[#3E3C3A]">Estimated Total</span>
-                <span className="font-bold text-lg text-[#C5A880]">${selectedService?.price}</span>
+              <div className="border-t border-[#EAE3D9]/50 pt-3 flex justify-between items-center text-sm">
+                <span className="font-bold text-[#40362D]">Estimated Total</span>
+                <span className="font-bold text-lg text-[#A68A64]">₹{selectedService?.price}</span>
               </div>
             </div>
           </div>
@@ -690,18 +730,18 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
 
       {/* Step 4: Success confirmation screen */}
       {step === 4 && createdAppointment && (
-        <div className="max-w-2xl mx-auto bg-white border border-[#EADCC9] rounded-2xl shadow-xl overflow-hidden print:border-none print:shadow-none">
+        <div className="max-w-2xl mx-auto bg-white border border-[#EAE3D9] rounded-2xl shadow-xl overflow-hidden print:border-none print:shadow-none">
           {/* Header Banner */}
-          <div className="bg-[#3E3C3A] text-white p-8 text-center relative">
+          <div className="bg-[#7C6A53] text-white p-8 text-center relative">
             <div className="absolute top-0 right-0 p-3 opacity-15">
-              <Sparkles className="w-24 h-24 text-[#C5A880]" />
+              <Sparkles className="w-24 h-24 text-[#A68A64]" />
             </div>
             
-            <div className="w-16 h-16 bg-[#C5A880] text-white rounded-full flex items-center justify-center mx-auto mb-4 border-4 border-[#3E3C3A] shadow-md animate-bounce">
+            <div className="w-16 h-16 bg-[#A68A64] text-white rounded-full flex items-center justify-center mx-auto mb-4 border-4 border-[#7C6A53] shadow-md animate-bounce">
               <CheckCircle2 className="w-8 h-8" />
             </div>
             <h3 className="font-serif-display text-3xl font-bold">Appointment Reserved</h3>
-            <p className="text-[#EADCC9] text-sm mt-1">We look forward to curating your look.</p>
+            <p className="text-[#F8F5F1] text-sm mt-1">We look forward to curating your look.</p>
             <span className="inline-block mt-3 px-3 py-1 bg-white/10 rounded-full text-[10px] font-mono tracking-wider uppercase">
               Ref ID: #{createdAppointment.id.substring(0, 8).toUpperCase()}
             </span>
@@ -709,30 +749,30 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
 
           {/* Details */}
           <div className="p-8 space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-6 border-b border-[#EADCC9]/40">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-6 border-b border-[#EAE3D9]/40">
               <div>
-                <span className="text-[10px] uppercase tracking-widest text-[#8B7E74] font-bold">Client</span>
-                <p className="text-base font-bold text-[#1F1E1D] mt-0.5">{createdAppointment.full_name}</p>
-                <p className="text-xs text-[#8B7E74]">{createdAppointment.email}</p>
-                <p className="text-xs text-[#8B7E74]">{createdAppointment.phone}</p>
+                <span className="text-[10px] uppercase tracking-widest text-[#7C6A53] font-bold">Client</span>
+                <p className="text-base font-bold text-[#2C2621] mt-0.5">{createdAppointment.full_name}</p>
+                <p className="text-xs text-[#7C6A53]">{createdAppointment.email}</p>
+                <p className="text-xs text-[#7C6A53]">{createdAppointment.phone}</p>
               </div>
 
               <div>
-                <span className="text-[10px] uppercase tracking-widest text-[#8B7E74] font-bold">Service Ritual</span>
-                <p className="text-base font-bold text-[#C5A880] mt-0.5">{createdAppointment.service?.name}</p>
-                <p className="text-xs text-[#8B7E74]">{createdAppointment.service?.duration_minutes} mins duration</p>
-                <p className="text-xs font-bold text-[#3E3C3A]">${createdAppointment.service?.price}</p>
+                <span className="text-[10px] uppercase tracking-widest text-[#7C6A53] font-bold">Service Ritual</span>
+                <p className="text-base font-bold text-[#A68A64] mt-0.5">{createdAppointment.service?.name}</p>
+                <p className="text-xs text-[#7C6A53]">{createdAppointment.service?.duration_minutes} mins duration</p>
+                <p className="text-xs font-bold text-[#40362D]">₹{createdAppointment.service?.price}</p>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-6 border-b border-[#EADCC9]/40">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-6 border-b border-[#EAE3D9]/40">
               <div>
-                <span className="text-[10px] uppercase tracking-widest text-[#8B7E74] font-bold">Date & Time</span>
-                <p className="text-base font-bold text-[#1F1E1D] mt-0.5">
+                <span className="text-[10px] uppercase tracking-widest text-[#7C6A53] font-bold">Date & Time</span>
+                <p className="text-base font-bold text-[#2C2621] mt-0.5">
                   {new Date(createdAppointment.appointment_date + 'T00:00:00').toLocaleDateString('default', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
                 </p>
-                <div className="flex items-center gap-1.5 text-xs text-[#8B7E74] mt-1">
-                  <Clock className="w-3.5 h-3.5 text-[#C5A880]" />
+                <div className="flex items-center gap-1.5 text-xs text-[#7C6A53] mt-1">
+                  <Clock className="w-3.5 h-3.5 text-[#A68A64]" />
                   <span>
                     {createdAppointment.start_time.substring(0, 5)} - {createdAppointment.end_time.substring(0, 5)}
                   </span>
@@ -740,32 +780,32 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
               </div>
 
               <div>
-                <span className="text-[10px] uppercase tracking-widest text-[#8B7E74] font-bold">Status</span>
+                <span className="text-[10px] uppercase tracking-widest text-[#7C6A53] font-bold">Status</span>
                 <div className="mt-1">
-                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-[#F8F5F1] text-[#A68A64] border border-[#EAE3D9]">
                     Pending Confirmation
                   </span>
                 </div>
-                <p className="text-[10px] text-[#8B7E74] mt-1.5">A confirmation email & calendar link have been dispatched.</p>
+                <p className="text-[10px] text-[#7C6A53] mt-1.5">A confirmation email & calendar link have been dispatched.</p>
               </div>
             </div>
 
             {createdAppointment.notes && (
-              <div className="pb-6 border-b border-[#EADCC9]/40">
-                <span className="text-[10px] uppercase tracking-widest text-[#8B7E74] font-bold">Client Notes</span>
-                <p className="text-xs text-[#3E3C3A] italic mt-1 leading-relaxed bg-[#FAF8F5] p-3 rounded-lg border border-[#EADCC9]/40">
+              <div className="pb-6 border-b border-[#EAE3D9]/40">
+                <span className="text-[10px] uppercase tracking-widest text-[#7C6A53] font-bold">Client Notes</span>
+                <p className="text-xs text-[#40362D] italic mt-1 leading-relaxed bg-[#F8F5F1] p-3 rounded-lg border border-[#EAE3D9]/40">
                   "{createdAppointment.notes}"
                 </p>
               </div>
             )}
 
             {/* Directions / Guidelines */}
-            <div className="flex gap-3 bg-[#FAF8F5] p-4 rounded-xl border border-[#EADCC9]/50">
-              <MapPin className="w-5 h-5 text-[#C5A880] shrink-0 mt-0.5" />
+            <div className="flex gap-3 bg-[#F8F5F1] p-4 rounded-xl border border-[#EAE3D9]/50">
+              <MapPin className="w-5 h-5 text-[#A68A64] shrink-0 mt-0.5" />
               <div>
-                <p className="text-xs font-bold text-[#3E3C3A] uppercase tracking-wider">AURA Salon Guidelines</p>
-                <p className="text-xs text-[#8B7E74] mt-1 leading-relaxed">
-                  We are located at <span className="font-semibold text-[#1F1E1D]">420 N. Beverly Drive, Beverly Hills, CA 90210</span>. Valet parking is available at the front entrance. If you need to cancel or modify your appointment, please contact us at least 24 hours in advance.
+                <p className="text-xs font-bold text-[#40362D] uppercase tracking-wider">AURA Salon Guidelines</p>
+                <p className="text-xs text-[#7C6A53] mt-1 leading-relaxed">
+                  We are located at <span className="font-semibold text-[#2C2621]">420 N. Beverly Drive, Beverly Hills, CA 90210</span>. Valet parking is available at the front entrance. If you need to cancel or modify your appointment, please contact us at least 24 hours in advance.
                 </p>
               </div>
             </div>
@@ -785,14 +825,14 @@ export default function BookingWizard({ onSuccess, selectedServiceId }: BookingW
                   setNotes('');
                   setCreatedAppointment(null);
                 }}
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-5 py-2.5 rounded-full border border-[#EADCC9] text-xs font-bold text-[#3E3C3A] hover:bg-[#F4EFE6] transition-all cursor-pointer"
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-5 py-2.5 rounded-full border border-[#EAE3D9] text-xs font-bold text-[#40362D] hover:bg-[#EAE3D9] transition-all cursor-pointer"
               >
                 <span>Book Another Appointment</span>
               </button>
 
               <button
                 onClick={handlePrint}
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-5 py-2.5 rounded-full bg-[#3E3C3A] text-white hover:bg-[#1F1E1D] text-xs font-bold transition-all cursor-pointer"
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-5 py-2.5 rounded-full bg-[#7C6A53] text-white hover:bg-[#5A4D3F] text-xs font-bold transition-all cursor-pointer"
               >
                 <Printer className="w-4 h-4" />
                 <span>Print Receipt</span>

@@ -1,0 +1,6 @@
+{
+  "name": "Aura Hair Salon",
+  "description": "A premium modern hair salon booking system and secure client management dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
